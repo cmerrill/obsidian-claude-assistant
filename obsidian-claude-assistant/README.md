@@ -164,6 +164,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | `model` | `opus` | `sonnet` is cheaper and usually fine for well-formed captures. |
 | `notify_on` | `questions` | `always`, `questions`, or `errors`. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
+| `renotify_after_minutes` | `60` | Re-send a still-unanswered question after this long. `0` disables re-asking. |
 | `max_notifications_per_cycle` | `3` | Stops a large batch from spamming your phone. |
 | `max_review_rounds` | `5` | After this many rounds on one note, it gives up and says so. |
 | `vault_path` | `/share/notes` | |
@@ -185,6 +186,16 @@ You get one notification per flagged note, with three actions:
 The notification `tag` stays constant across rounds, so Android replaces it
 rather than stacking. One live notification per note, updating as the
 conversation moves.
+
+**Tapping the notification body does nothing.** On Android it is marked
+`sticky` with `clickAction: noAction`, so a stray tap neither opens the app nor
+dismisses the question — only one of the three actions above does. Answering it
+(with **Answer** or **Looks good**) clears the notification for you.
+
+**An unanswered question comes back.** If none of the three actions has been
+used after `renotify_after_minutes`, the same question is re-sent, titled
+"still waiting". This also covers a notification lost to a swipe, a phone that
+was off, or an app update. Set `renotify_after_minutes: 0` to turn it off.
 
 Add a `Needs Review.base` view to the vault to see everything flagged at once.
 
@@ -212,6 +223,12 @@ supervisor websocket is refused, fall back to an HA automation on
 ```json
 {"note":"restaurants/bar-tartine.md","action":"REPLY","reply_text":"561 Valencia"}
 ```
+
+**Answer opens a text field on Android but not on iOS** — the free-text
+**Answer** action carries `behavior: textInput` for iOS as well as Android's
+`REPLY` magic name, so this should not happen on a current install. If it
+still does, the app is likely stale enough to ignore `behavior`; update the
+Companion app.
 
 **A note keeps failing** — after 3 attempts it moves to `inbox/stuck/` and you
 get one notification. Fix it by hand and move it back to `inbox/`.

@@ -1,6 +1,6 @@
 name: Obsidian Claude Assistant
 slug: obsidian_claude_assistant
-version: "0.3.0"
+version: "0.4.0"
 description: >-
   Syncs an Obsidian vault headlessly, then files anything dropped in inbox/ into
   the right note type and folder with Claude Code. Asks by push notification when
@@ -34,6 +34,7 @@ options:
   notify_service: ""
   notify_on: questions
   enable_replies: true
+  renotify_after_minutes: 60
   max_notifications_per_cycle: 3
   max_review_rounds: 5
   log_level: info
@@ -55,6 +56,7 @@ schema:
   notify_service: str?
   notify_on: list(always|questions|errors)
   enable_replies: bool
+  renotify_after_minutes: int(0,10080)
   max_notifications_per_cycle: int(1,10)
   max_review_rounds: int(1,20)
   log_level: list(trace|debug|info|notice|warning|error|fatal)

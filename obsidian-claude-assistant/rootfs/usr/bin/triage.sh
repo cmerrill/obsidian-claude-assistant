@@ -233,6 +233,11 @@ if [ -s "${REPLIES}" ]; then
             continue
         fi
 
+        # The question notification is sticky, so pressing an action leaves it
+        # on screen. Take it down now that it has been answered. A follow-up
+        # round sends a fresh one under the same tag.
+        /usr/bin/notify.sh clear "obsidian-claude-assistant:${note}" || true
+
         # Precedence: stop beats a reply, a reply beats a bare acknowledgement.
         if [[ "${actions}" == *CLAUDE_STOP* ]]; then
             log "${note}: stop asking"
@@ -369,10 +374,22 @@ prune_state "${STATE}/notified.json"
 prune_state "${STATE}/threads.json"
 
 # --- 7. ask about anything still flagged -------------------------------------
-# notified.json records the round we last pinged about, so an unchanged note
-# never pings twice.
+# notified.json records "<round>@<epoch>": the round we last pinged about, and
+# when. The round stops an unchanged note pinging twice; the timestamp lets an
+# unanswered question come back.
+#
+# A notification is easy to lose — a stray tap used to open the app and dismiss
+# it, a swipe still does, and a phone that was off never saw it. Without a
+# re-ask the note stays flagged in the vault and is never mentioned again.
+#
+# Two things to know about the timer: a re-ask spends one of the
+# MAX_NOTIFICATIONS slots for the cycle, and the delay rounds up to the next
+# interval_minutes tick, because this section only runs inside a cycle.
 
 [ "${NOTIFY_ON}" = "errors" ] && exit 0
+
+RENOTIFY_AFTER_MINUTES="${RENOTIFY_AFTER_MINUTES:-60}"
+now="$(date +%s)"
 
 sent=0
 while IFS= read -r note; do
@@ -381,7 +398,24 @@ while IFS= read -r note; do
 
     round="$(fm_get "${note}" 'review-round')"
     round="${round:-1}"
-    [ "$(json_get "${STATE}/notified.json" "${note}")" = "${round}" ] && continue
+
+    # A value with no @ predates the timer. Treat it as never-timestamped, so
+    # each still-open question is re-asked once after the upgrade.
+    prev="$(json_get "${STATE}/notified.json" "${note}")"
+    case "${prev}" in
+        *@*) prev_round="${prev%@*}"; prev_ts="${prev##*@}" ;;
+        *)   prev_round="${prev}";    prev_ts=0 ;;
+    esac
+    case "${prev_ts}" in ''|*[!0-9]*) prev_ts=0 ;; esac
+
+    repeat=0
+    if [ -n "${prev_round}" ] && [ "${prev_round}" = "${round}" ]; then
+        # Already given up on this one — say it once, then leave it alone.
+        [ "${round}" -ge "${MAX_REVIEW_ROUNDS}" ] && continue
+        [ "${RENOTIFY_AFTER_MINUTES}" -eq 0 ] && continue
+        [ $(( now - prev_ts )) -lt $(( RENOTIFY_AFTER_MINUTES * 60 )) ] && continue
+        repeat=1
+    fi
 
     question="$(last_question "${note}")"
     [ -z "${question}" ] && question="Needs a look — no question recorded."
@@ -390,12 +424,15 @@ while IFS= read -r note; do
     if [ "${round}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
         /usr/bin/notify.sh plain "obsidian-claude-assistant:${note}" \
             "Gave up: ${name}" "${question}"
+    elif [ "${repeat}" -eq 1 ]; then
+        /usr/bin/notify.sh ask "obsidian-claude-assistant:${note}" \
+            "${name} (round ${round}, still waiting)" "${question}"
     else
         /usr/bin/notify.sh ask "obsidian-claude-assistant:${note}" \
             "${name} (round ${round})" "${question}"
     fi
 
-    json_set "${STATE}/notified.json" "${note}" "${round}"
+    json_set "${STATE}/notified.json" "${note}" "${round}@${now}"
     sent=$(( sent + 1 ))
 done < <(flagged_notes)
 

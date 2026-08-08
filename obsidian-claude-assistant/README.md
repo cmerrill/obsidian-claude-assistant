@@ -49,7 +49,7 @@ syncing — no rebuild.
 | `obsidian_email` / `obsidian_password` | Your Obsidian account. **2FA must be off** — see below |
 | `obsidian_vault_name` | Exact name of your remote Sync vault — `ob sync-list-remote` prints it |
 | `claude_oauth_token` | `claude setup-token` on any machine |
-| `git_ssh_key` | Private half of a new ed25519 deploy key |
+| `git_ssh_key` | Private half of a new ed25519 deploy key, base64-encoded |
 | `git_repo_url` | e.g. `git@github.com:you/notes.git` |
 | `notify_service` | Developer Tools → Actions → the part of `notify.mobile_app_…` after `notify.` |
 
@@ -103,9 +103,34 @@ ssh-keygen -t ed25519 -C "obsidian-claude-assistant" -f ./obsidian-claude-key -N
 The key must have no passphrase — nothing can type one at boot.
 
 Add `obsidian-claude-key.pub` to the notes repo under Settings → Deploy keys with
-**Allow write access**. Paste the contents of `obsidian-claude-key` into
-`git_ssh_key`. A deploy key is scoped to one repository; a personal access token
-is not.
+**Allow write access**. A deploy key is scoped to one repository; a personal
+access token is not.
+
+The private key goes in `git_ssh_key`. That field is a single line, because the
+add-on options form has no multiline input. So encode the key first:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\obsidian-claude-key")) | Set-Clipboard
+```
+
+```bash
+base64 -w0 ./obsidian-claude-key | tr -d '\n'
+```
+
+Paste the result into `git_ssh_key`. The add-on decodes it at start.
+
+A raw private key is also accepted, for anyone who prefers the Configuration
+tab's ⋮ → **Edit in YAML** view:
+
+```yaml
+git_ssh_key: |
+  -----BEGIN OPENSSH PRIVATE KEY-----
+  b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAA...
+  -----END OPENSSH PRIVATE KEY-----
+```
+
+Indent every key line the same amount. Do not re-save from the form view after
+that — the single-line field flattens the newlines.
 
 ## Install
 

@@ -24,7 +24,18 @@ mkdir -p /data/claude "${APP_HOME}" "${SSH_DIR}" "${VAULT}"
 
 # --- secrets -----------------------------------------------------------------
 
-bashio::config 'git_ssh_key' > "${SSH_DIR}/id_ed25519"
+# The options form has no multiline field, so the key is pasted base64-encoded.
+# A raw private key still works — the add-on's YAML editor can carry newlines.
+GIT_SSH_KEY="$(bashio::config 'git_ssh_key')"
+case "${GIT_SSH_KEY}" in
+    "-----BEGIN"*)
+        printf '%s' "${GIT_SSH_KEY}" > "${SSH_DIR}/id_ed25519"
+        ;;
+    *)
+        printf '%s' "${GIT_SSH_KEY}" | base64 -d > "${SSH_DIR}/id_ed25519" \
+            || bashio::exit.nok "git_ssh_key is neither a private key nor valid base64"
+        ;;
+esac
 # Add-on options arrive without a trailing newline; ssh rejects a key like that.
 [ -n "$(tail -c1 "${SSH_DIR}/id_ed25519")" ] && printf '\n' >> "${SSH_DIR}/id_ed25519"
 chmod 700 "${SSH_DIR}"

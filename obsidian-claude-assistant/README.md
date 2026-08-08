@@ -92,6 +92,16 @@ Uses your Claude subscription rather than per-token API billing.
 ssh-keygen -t ed25519 -C "obsidian-claude-assistant" -f ./obsidian-claude-key -N ""
 ```
 
+On Windows PowerShell, quote the empty passphrase as `'""'`. A bare `""` is
+stripped before `ssh-keygen` sees it, and you get `option requires an argument
+-- N`:
+
+```powershell
+ssh-keygen -t ed25519 -C "obsidian-claude-assistant" -f ./obsidian-claude-key -N '""'
+```
+
+The key must have no passphrase — nothing can type one at boot.
+
 Add `obsidian-claude-key.pub` to the notes repo under Settings → Deploy keys with
 **Allow write access**. Paste the contents of `obsidian-claude-key` into
 `git_ssh_key`. A deploy key is scoped to one repository; a personal access token

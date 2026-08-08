@@ -195,7 +195,7 @@ run_claude() {
 
 ob sync-status --path "${VAULT}" 2>/dev/null | sed 's/^/[triage] sync-status: /' || true
 
-for _ in $(seq 1 12); do
+for _ in $(seq 1 36); do
     if [ -z "$(find "${VAULT}" -path "${VAULT}/.git" -prune -o -type f -newermt '-10 seconds' -print -quit 2>/dev/null)" ]; then
         break
     fi
@@ -266,31 +266,66 @@ if [ -s "${REPLIES}" ]; then
 fi
 
 # --- 4. triage the inbox -----------------------------------------------------
+# Only file a note that has stopped changing. Obsidian Sync pushes a capture as
+# it is typed, so a note touched seconds ago may be half-written — and triaging
+# it would file the fragment, then delete the file before the rest arrives.
+#
+# Age is measured from mtime, which is the last write from any source. Keep
+# typing and the note simply waits for the next cycle. A note that arrives by
+# git pull gets a fresh mtime too, so it also waits one settle window.
+#
+# The step-1 quiesce loop is a different guard: it waits for the vault as a
+# whole to go quiet, and proceeds anyway once it times out. This one is per file
+# and does not give up.
 
 shopt -s nullglob
 INBOX_FILES=("${VAULT}"/inbox/*.md)
 shopt -u nullglob
 
-if [ ${#INBOX_FILES[@]} -eq 0 ]; then
-    [ "${REPLIES_HANDLED}" -eq 0 ] && log "inbox empty, nothing to do"
+SETTLE_MIN="${INBOX_SETTLE_MINUTES:-2}"
+NOW="$(date +%s)"
+
+READY=()
+WAITING=0
+for f in "${INBOX_FILES[@]}"; do
+    mtime="$(stat -c %Y "${f}" 2>/dev/null)"
+    if [ -z "${mtime}" ] || [ $(( NOW - mtime )) -lt $(( SETTLE_MIN * 60 )) ]; then
+        log "$(basename "${f}"): edited within ${SETTLE_MIN}m, waiting for it to settle"
+        WAITING=$(( WAITING + 1 ))
+        continue
+    fi
+    READY+=("${f}")
+done
+
+if [ ${#READY[@]} -eq 0 ]; then
+    [ "${REPLIES_HANDLED}" -eq 0 ] && [ "${WAITING}" -eq 0 ] && log "inbox empty, nothing to do"
 else
-    log "triaging ${#INBOX_FILES[@]} note(s)"
-    if run_claude "/triage-inbox"; then
+    # Name the eligible notes in the prompt. The vault-side command globs inbox/
+    # on its own, and would otherwise pick up the ones still settling.
+    names="$(printf '%s, ' "${READY[@]##*/}")"
+    names="${names%, }"
+
+    log "triaging ${#READY[@]} note(s): ${names}"
+    if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
-        vault_commit_and_push "Triage: ${#INBOX_FILES[@]} note(s) from inbox" || true
+        vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
     else
         /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
-            "Triage failed" "Claude exited non-zero on ${#INBOX_FILES[@]} inbox note(s). Check the add-on log."
+            "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
         # Leave the files in place; the stuck counter below decides when to give up.
     fi
 fi
 
 # --- 5. stuck files ----------------------------------------------------------
 # A malformed note that survives every run would otherwise burn tokens forever.
+#
+# Only the notes offered to Claude this cycle can be counted. A note still
+# settling was never attempted, and three quick edits must not park it.
+# Anything filed successfully is already gone, so it drops out here.
 
 STUCK_NOTIFIED=0
-shopt -s nullglob
-for f in "${VAULT}"/inbox/*.md; do
+for f in "${READY[@]}"; do
+    [ -f "${f}" ] || continue
     base="$(basename "${f}")"
     count="$(json_get "${STATE}/attempts.json" "${base}")"
     count=$(( ${count:-0} + 1 ))
@@ -308,7 +343,6 @@ for f in "${VAULT}"/inbox/*.md; do
         json_set "${STATE}/attempts.json" "${base}" "${count}"
     fi
 done
-shopt -u nullglob
 
 [ "${STUCK_NOTIFIED}" -eq 1 ] && vault_commit_and_push "Triage: park stuck notes" || true
 

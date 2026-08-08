@@ -19,8 +19,9 @@ Android (Obsidian mobile)
         git pull
         git commit + push          <- the raw capture enters history HERE
         apply any queued replies
-        inbox empty? stop, no tokens spent
-        claude -p "/triage-inbox"
+        skip inbox notes touched in the last 2 minutes
+        nothing ready? stop, no tokens spent
+        claude -p "/triage-inbox <the settled notes>"
         git commit + push
         notify about flagged and stuck notes
                                      |
@@ -41,6 +42,13 @@ repository.
 and `.claude/commands/resolve-review.md` sit in the notes repo next to the
 `CLAUDE.md` they depend on. Change how triage behaves by editing those files and
 syncing — no rebuild.
+
+**A note has to sit still before it is filed.** Obsidian Sync pushes a capture
+while you are still typing it. Triaging that would file half a thought, then
+delete the file before the rest arrives. So a note is skipped until its mtime is
+at least `inbox_settle_minutes` old, and the eligible names are passed to
+`/triage-inbox`. Your `triage-inbox.md` must file the notes named in the
+arguments rather than everything in `inbox/`, or the guard does nothing.
 
 ## What you have to provide
 
@@ -152,6 +160,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | Option | Default | Notes |
 |---|---|---|
 | `interval_minutes` | `10` | Poll interval. A reply wakes the loop immediately regardless. |
+| `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit. `0` disables the wait. |
 | `model` | `opus` | `sonnet` is cheaper and usually fine for well-formed captures. |
 | `notify_on` | `questions` | `always`, `questions`, or `errors`. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |

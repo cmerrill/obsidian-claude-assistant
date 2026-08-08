@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck source=/dev/null
+. /data/env.sh
+
+if [ "${ENABLE_REPLIES}" != "true" ]; then
+    bashio::log.info "Replies disabled — listener idle"
+    exec sleep infinity
+fi
+
+exec s6-setuidgid app node /usr/bin/reply-listener.js

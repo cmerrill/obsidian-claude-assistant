@@ -1,0 +1,58 @@
+name: Obsidian Claude Assistant
+slug: obsidian_claude_assistant
+version: "0.1.0"
+description: >-
+  Syncs an Obsidian vault headlessly, then files anything dropped in inbox/ into
+  the right note type and folder with Claude Code. Asks by push notification when
+  it is unsure, and accepts your reply from the notification.
+url: https://github.com/cmerrill/obsidian-claude-assistant
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
+homeassistant_api: true
+map:
+  - type: share
+    read_only: false
+options:
+  obsidian_email: ""
+  obsidian_password: ""
+  obsidian_vault_name: ""
+  claude_oauth_token: ""
+  git_repo_url: ""
+  git_branch: main
+  git_ssh_key: ""
+  git_user_name: Obsidian Claude Assistant
+  git_user_email: obsidian-claude-assistant@localhost
+  vault_path: /share/notes
+  interval_minutes: 10
+  model: sonnet
+  permission_mode: allowlist
+  notify_service: ""
+  notify_on: questions
+  enable_replies: true
+  max_notifications_per_cycle: 3
+  max_review_rounds: 5
+  log_level: info
+schema:
+  obsidian_email: email
+  obsidian_password: password
+  obsidian_vault_name: str
+  claude_oauth_token: password
+  git_repo_url: str
+  git_branch: str
+  git_ssh_key: password
+  git_user_name: str
+  git_user_email: str
+  vault_path: str
+  interval_minutes: int(1,1440)
+  model: str
+  permission_mode: list(allowlist|bypass)
+  notify_service: str?
+  notify_on: list(always|questions|errors)
+  enable_replies: bool
+  max_notifications_per_cycle: int(1,10)
+  max_review_rounds: int(1,20)
+  log_level: list(trace|debug|info|notice|warning|error|fatal)

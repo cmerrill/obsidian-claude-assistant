@@ -1,0 +1,98 @@
+#!/usr/bin/with-contenv bashio
+# Runs as root. Plants secrets, fixes ownership, makes sure the vault exists as
+# a git checkout. Everything downstream runs as uid 1000 and sources /data/env.sh.
+set -e
+
+VAULT="$(bashio::config 'vault_path')"
+
+# HOME lives in /data, not /home/app. `ob` stores its credentials under the
+# home directory, and anything in the image layer is wiped by a restart or an
+# add-on update — which would silently log the sync client out.
+APP_HOME=/data/home
+SSH_DIR="${APP_HOME}/.ssh"
+
+bashio::log.level "$(bashio::config 'log_level')"
+bashio::log.info "Preparing configuration"
+
+bashio::config.require 'obsidian_email'
+bashio::config.require 'obsidian_password'
+bashio::config.require 'obsidian_vault_name'
+bashio::config.require 'claude_oauth_token'
+bashio::config.require 'git_ssh_key'
+
+mkdir -p /data/claude "${APP_HOME}" "${SSH_DIR}" "${VAULT}"
+
+# --- secrets -----------------------------------------------------------------
+
+bashio::config 'git_ssh_key' > "${SSH_DIR}/id_ed25519"
+# Add-on options arrive without a trailing newline; ssh rejects a key like that.
+[ -n "$(tail -c1 "${SSH_DIR}/id_ed25519")" ] && printf '\n' >> "${SSH_DIR}/id_ed25519"
+chmod 700 "${SSH_DIR}"
+chmod 600 "${SSH_DIR}/id_ed25519"
+
+# --- shared environment ------------------------------------------------------
+
+cat > /data/env.sh <<EOF
+export VAULT="${VAULT}"
+export GIT_BRANCH="$(bashio::config 'git_branch')"
+export GIT_REPO_URL="$(bashio::config 'git_repo_url')"
+export MODEL="$(bashio::config 'model')"
+export PERMISSION_MODE="$(bashio::config 'permission_mode')"
+export INTERVAL_MINUTES="$(bashio::config 'interval_minutes')"
+export NOTIFY_SERVICE="$(bashio::config 'notify_service')"
+export NOTIFY_ON="$(bashio::config 'notify_on')"
+export ENABLE_REPLIES="$(bashio::config 'enable_replies')"
+export MAX_NOTIFICATIONS="$(bashio::config 'max_notifications_per_cycle')"
+export MAX_REVIEW_ROUNDS="$(bashio::config 'max_review_rounds')"
+export OBSIDIAN_VAULT_NAME="$(bashio::config 'obsidian_vault_name')"
+export OBSIDIAN_EMAIL="$(bashio::config 'obsidian_email')"
+export OBSIDIAN_PASSWORD="$(bashio::config 'obsidian_password')"
+export CLAUDE_CODE_OAUTH_TOKEN="$(bashio::config 'claude_oauth_token')"
+export CLAUDE_CONFIG_DIR=/data/claude
+export HOME=${APP_HOME}
+export GIT_SSH_COMMAND="ssh -i ${SSH_DIR}/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_DIR}/known_hosts"
+EOF
+chmod 600 /data/env.sh
+
+# --- git identity ------------------------------------------------------------
+# Written directly rather than via `git config --global`, so it lands in the
+# app user's home no matter who runs this.
+
+cat > "${APP_HOME}/.gitconfig" <<EOF
+[user]
+	name = $(bashio::config 'git_user_name')
+	email = $(bashio::config 'git_user_email')
+[pull]
+	rebase = true
+[safe]
+	directory = ${VAULT}
+[advice]
+	detachedHead = false
+EOF
+
+# --- state files -------------------------------------------------------------
+
+touch /data/wake /data/replies.jsonl
+[ -f /data/attempts.json ] || echo '{}' > /data/attempts.json
+[ -f /data/notified.json ] || echo '{}' > /data/notified.json
+[ -f /data/threads.json ] || echo '{}' > /data/threads.json
+
+chown -R 1000:1000 /data "${VAULT}"
+
+# --- vault checkout ----------------------------------------------------------
+
+if [ ! -d "${VAULT}/.git" ]; then
+    if [ -n "$(ls -A "${VAULT}" 2>/dev/null)" ]; then
+        bashio::exit.nok "${VAULT} has content but is not a git checkout — move it aside first"
+    fi
+    bashio::log.info "Cloning $(bashio::config 'git_repo_url') into ${VAULT}"
+    # shellcheck source=/dev/null
+    s6-setuidgid app bash -c '. /data/env.sh && git clone --branch "${GIT_BRANCH}" "${GIT_REPO_URL}" "${VAULT}"' \
+        || bashio::exit.nok "Clone failed — check the deploy key has read access"
+else
+    bashio::log.info "Vault already checked out at ${VAULT}"
+fi
+
+s6-setuidgid app mkdir -p "${VAULT}/inbox"
+
+bashio::log.info "Configuration ready"

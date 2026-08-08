@@ -1,0 +1,14 @@
+# Nothing here should ever hold a credential — this repo is public.
+# Belt and braces in case a key or a filled-in config is left lying around.
+*.key
+*.pem
+id_ed25519*
+id_rsa*
+*.local
+*.local.*
+options.json
+env.sh
+secrets.yaml
+
+.DS_Store
+Thumbs.db

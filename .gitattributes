@@ -1,0 +1,8 @@
+# Scripts run inside a Linux container. CRLF would break every shebang.
+* text=auto eol=lf
+*.sh text eol=lf
+*.js text eol=lf
+*.yaml text eol=lf
+run text eol=lf
+up text eol=lf
+type text eol=lf

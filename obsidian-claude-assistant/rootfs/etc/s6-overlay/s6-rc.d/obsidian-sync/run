@@ -1,0 +1,2 @@
+#!/usr/bin/with-contenv bashio
+exec s6-setuidgid app /usr/bin/obsidian-sync.sh

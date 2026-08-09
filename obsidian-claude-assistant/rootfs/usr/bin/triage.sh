@@ -443,6 +443,12 @@ while IFS= read -r note; do
     question="$(last_question "${note}")"
     [ -z "${question}" ] && question="Needs a look — no question recorded."
 
+    # Diagnostic: how much question text we actually hand to the notification.
+    # If this is well under the note's real question, the loss is on our side
+    # (line-based extraction); if it matches but the phone shows less, the shade
+    # is capping the expanded height and the rest is simply not rendered.
+    log "${note}: notifying with ${#question}-char question"
+
     name="$(basename "${note}" .md)"
     if [ "${round}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
         /usr/bin/notify.sh plain "obsidian-claude-assistant:${note}" \

@@ -81,20 +81,48 @@ fm_set() {
 
 # The last question in the transcript, trimmed to fit a notification.
 #
-# Android's Companion app renders the message with BigTextStyle, so the
-# expanded (chevron / long-press) view shows a full paragraph — the cap only
-# has to keep a runaway question from bloating the payload, not fit one collapsed
-# line. Anything past the cap gets an ellipsis so the truncation is obvious.
-# sed rather than `grep -oP`: PCRE is unavailable under some locales.
+# A question is a `- **Qn** …` list item, and markdown wraps: Claude or an
+# editor may hard-wrap one across several physical lines with the remainder
+# indented under the marker. Read those continuation lines too — matching only
+# the marker line drops the tail silently, and the tail is usually where the
+# actual question lives. A blank line, a new list item, a heading, or a rule
+# ends it.
+#
+# Android's Companion app renders the message with BigTextStyle, so the expanded
+# view shows a paragraph; the cap only keeps a runaway question from bloating
+# the payload. Trim back to a word boundary so a cut never lands inside a
+# multi-byte character — jq needs valid UTF-8, and both ${#q} and `cut -c` count
+# bytes under the container's C locale.
+# awk rather than `grep -oP`: PCRE is unavailable under some locales.
 last_question() {
-    local q
-    q="$(sed -n 's/\r$//; s/^- \*\*Q[0-9][0-9]*\*\*[[:space:]]*//p' "$1" 2>/dev/null \
-        | tail -n1)"
-    if [ "${#q}" -gt 1000 ]; then
-        printf '%s…' "$(printf '%s' "${q}" | cut -c1-999)"
-    else
+    local q head
+    q="$(awk '
+        { sub(/\r$/, "") }
+        /^- \*\*Q[0-9]+\*\*/ {
+            line = $0
+            sub(/^- \*\*Q[0-9]+\*\*[ \t]*/, "", line)
+            q = line; cap = 1; next
+        }
+        cap {
+            if ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*([-*+]|[0-9]+\.)[ \t]/ \
+                || $0 ~ /^#/ || $0 ~ /^---/) { cap = 0; next }
+            t = $0; sub(/^[ \t]+/, "", t); q = q " " t
+        }
+        END { print q }
+    ' "$1" 2>/dev/null)"
+
+    if [ "${#q}" -le 1000 ]; then
         printf '%s' "${q}"
+        return
     fi
+
+    # Drop the partial trailing word; falls back to the hard cut when there is
+    # no space to trim back to.
+    head="$(printf '%s' "${q}" | cut -c1-999)"
+    case "${head}" in
+        *' '*) head="${head% *}" ;;
+    esac
+    printf '%s…' "${head}"
 }
 
 # Notes still awaiting an answer, excluding ones the user told us to drop.

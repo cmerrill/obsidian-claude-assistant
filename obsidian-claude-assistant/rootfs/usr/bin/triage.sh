@@ -80,10 +80,21 @@ fm_set() {
 }
 
 # The last question in the transcript, trimmed to fit a notification.
+#
+# Android's Companion app renders the message with BigTextStyle, so the
+# expanded (chevron / long-press) view shows a full paragraph — the cap only
+# has to keep a runaway question from bloating the payload, not fit one collapsed
+# line. Anything past the cap gets an ellipsis so the truncation is obvious.
 # sed rather than `grep -oP`: PCRE is unavailable under some locales.
 last_question() {
-    sed -n 's/\r$//; s/^- \*\*Q[0-9][0-9]*\*\*[[:space:]]*//p' "$1" 2>/dev/null \
-        | tail -n1 | cut -c1-180
+    local q
+    q="$(sed -n 's/\r$//; s/^- \*\*Q[0-9][0-9]*\*\*[[:space:]]*//p' "$1" 2>/dev/null \
+        | tail -n1)"
+    if [ "${#q}" -gt 1000 ]; then
+        printf '%s…' "$(printf '%s' "${q}" | cut -c1-999)"
+    else
+        printf '%s' "${q}"
+    fi
 }
 
 # Notes still awaiting an answer, excluding ones the user told us to drop.

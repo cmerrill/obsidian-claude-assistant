@@ -223,6 +223,18 @@ vault_commit_and_push "Sync: inbound from Obsidian" || true
 
 REPLIES_HANDLED=0
 
+# Recover a batch a previous cycle claimed but never finished. PENDING only
+# exists here if a run died between the claim below and its own `rm` — a
+# container reset mid-drain, say. Those answers were already delivered by the
+# phone, so fold them back onto the live queue instead of stranding them (or
+# letting the claim below clobber the file). Append rather than rewrite REPLIES,
+# so a reply the listener is writing this instant can't be lost to the move.
+if [ -s "${PENDING}" ]; then
+    log "recovering replies from an interrupted cycle"
+    cat "${PENDING}" >> "${REPLIES}"
+    rm -f "${PENDING}"
+fi
+
 if [ -s "${REPLIES}" ]; then
     # Claim the queue atomically; the listener keeps appending to a fresh file.
     mv "${REPLIES}" "${PENDING}"

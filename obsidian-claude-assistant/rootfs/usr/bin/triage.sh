@@ -88,9 +88,11 @@ fm_set() {
 # actual question lives. A blank line, a new list item, a heading, or a rule
 # ends it.
 #
-# Android's Companion app renders the message with BigTextStyle, so the expanded
-# view shows a paragraph; the cap only keeps a runaway question from bloating
-# the payload. Trim back to a word boundary so a cut never lands inside a
+# Android's Companion app renders the message with BigTextStyle, but the shade
+# caps the expanded view around 430 bytes (~10 lines) and cuts what is past it
+# with no indication there was more. Cap here at that same length instead, so
+# the truncation shows up as an explicit ellipsis rather than a sentence that
+# just stops. Trim back to a word boundary so a cut never lands inside a
 # multi-byte character — jq needs valid UTF-8, and both ${#q} and `cut -c` count
 # bytes under the container's C locale.
 # awk rather than `grep -oP`: PCRE is unavailable under some locales.
@@ -111,14 +113,14 @@ last_question() {
         END { print q }
     ' "$1" 2>/dev/null)"
 
-    if [ "${#q}" -le 1000 ]; then
+    if [ "${#q}" -le 430 ]; then
         printf '%s' "${q}"
         return
     fi
 
     # Drop the partial trailing word; falls back to the hard cut when there is
     # no space to trim back to.
-    head="$(printf '%s' "${q}" | cut -c1-999)"
+    head="$(printf '%s' "${q}" | cut -c1-429)"
     case "${head}" in
         *' '*) head="${head% *}" ;;
     esac

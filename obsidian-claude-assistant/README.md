@@ -3,7 +3,8 @@
 Keeps an Obsidian vault synced headlessly, then files anything you drop in
 `inbox/` into the right note type and folder using Claude Code. Commits and
 pushes to GitHub as a backup. Asks by push notification when it is unsure, and
-takes your answer straight from the notification.
+takes your answer straight from the notification. Sweeps finished tasks out of
+`todo/` lists on the same schedule.
 
 ## How it works
 
@@ -22,6 +23,8 @@ Android (Obsidian mobile)
         skip inbox notes touched in the last 2 minutes
         nothing ready? stop, no tokens spent
         claude -p "/triage-inbox <the settled notes>"
+        git commit + push
+        sweep finished tasks in todo/ into their "## Done" section
         git commit + push
         notify about flagged and stuck notes
                                      |
@@ -42,6 +45,13 @@ repository.
 and `.claude/commands/resolve-review.md` sit in the notes repo next to the
 `CLAUDE.md` they depend on. Change how triage behaves by editing those files and
 syncing — no rebuild.
+
+**The todo sweep is the exception, and is shell.** Moving a ticked checkbox
+from `## Tasks` to `## Done` is mechanical, so it runs as
+[todo-sweep.sh](rootfs/usr/bin/todo-sweep.sh) rather than as a prompt: no
+tokens on a cycle where nothing was ticked, and the task text is moved
+byte-for-byte instead of being retyped by a model. Changing its behaviour does
+need a rebuild.
 
 **A note has to sit still before it is filed.** Obsidian Sync pushes a capture
 while you are still typing it. Triaging that would file half a thought, then
@@ -160,7 +170,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | Option | Default | Notes |
 |---|---|---|
 | `interval_minutes` | `10` | Poll interval. A reply wakes the loop immediately regardless. |
-| `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit. `0` disables the wait. |
+| `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit, and against sweeping a `todo/` note someone is editing. `0` disables the wait. |
 | `model` | `opus` | `sonnet` is cheaper and usually fine for well-formed captures. |
 | `notify_on` | `questions` | `always`, `questions`, or `errors`. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
@@ -199,10 +209,55 @@ was off, or an app update. Set `renotify_after_minutes: 0` to turn it off.
 
 Add a `Needs Review.base` view to the vault to see everything flagged at once.
 
+## The todo sweep
+
+Ticking a box in Obsidian leaves the item where it was, so a list you actually
+use fills up with things that are already done. Every cycle, after the inbox
+pass, [todo-sweep.sh](rootfs/usr/bin/todo-sweep.sh) walks `todo/*.md` and moves
+each finished **top-level** task into that note's `## Done` section.
+
+```markdown
+## Tasks                        ## Tasks
+
+- [ ] Bike rain jacket          - [ ] Bike rain jacket
+- [x] Running shoes      ->     - [ ] Dress shoes
+- [ ] Dress shoes
+                                ## Done
+## Done
+                                - [x] Travel toothbrush
+- [x] Travel toothbrush         - [x] Running shoes
+```
+
+What it will and will not do:
+
+- **Only a top-level `- [x]` moves.** A checked subtask under an unchecked
+  parent stays nested exactly where it is — the parent is what "done" means.
+- **A moved task takes its children with it**, and any child still unchecked is
+  checked on the way out. Ticking the parent is the statement that the whole
+  thing is finished, so `## Done` never ends up holding an open box.
+- **`## Done` is created only when there is something to put in it**, directly
+  after `## Tasks`, so `## Notes` stays last.
+- **`status` is never touched.** A shopping list whose `## Tasks` is empty is
+  still `status: open` — deciding a todo note is finished stays your call, and
+  a recurring list would otherwise close itself every time you cleared it.
+- **A note with no `## Tasks` section is left alone.** That is a single-task
+  todo, and giving it sections would turn it into a list.
+- **Nothing else in the file changes.** Frontmatter, prose, ordering, and CRLF
+  line endings all survive; the task text is moved, never rewritten.
+
+A todo note is skipped until it has been untouched for `inbox_settle_minutes`,
+same as an inbox capture — rewriting a file under a live Obsidian editor invites
+a sync conflict over a cosmetic change. So a box ticked just now is swept on the
+following cycle, not this one.
+
+The sweep is confined to `todo/`. `projects/` notes have the same `## Tasks`
+structure but no `## Done` convention, and are left alone.
+
 ## Cost
 
 Claude runs only when there is an inbox file or a queued reply. An empty tick
-costs nothing. **Looks good** costs nothing.
+costs nothing. **Looks good** costs nothing. The todo sweep is shell, so it
+costs nothing either — on any cycle, whether or not it moves something.
 
 ## Troubleshooting
 
@@ -232,6 +287,11 @@ Companion app.
 
 **A note keeps failing** — after 3 attempts it moves to `inbox/stuck/` and you
 get one notification. Fix it by hand and move it back to `inbox/`.
+
+**A ticked box did not move to `## Done`** — the log says which. A note edited
+within `inbox_settle_minutes` is left for the next cycle, and only a top-level
+task moves: a checked subtask stays under its parent until the parent is ticked
+too.
 
 ## State
 

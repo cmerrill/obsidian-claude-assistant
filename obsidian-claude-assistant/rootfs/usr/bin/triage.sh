@@ -30,6 +30,27 @@ fi
 
 cd "${VAULT}" || exit 1
 
+# --- rewriting a file in place -----------------------------------------------
+# Every rewriter below — frontmatter and JSON alike — builds the new version in
+# a tempfile. That tempfile must never be renamed over the target: mktemp
+# creates at 0600, and mv carries the mode with it. For a vault note that turns
+# 644 into 600, so the Samba, SSH, and File editor add-ons quietly lose read
+# access to exactly the notes you interact with most — one flagged note at a
+# time, with nothing on screen to say why.
+#
+# Writing through the existing file keeps its mode, its owner, and its inode.
+# Nothing is given up by doing so: /tmp is the container's own layer and the
+# vault is a bind mount from the host, so the mv this replaces was already a
+# copy onto a truncated destination, not an atomic rename.
+#
+# todo-sweep.sh writes through the target for the same reason. It is a separate
+# script and cannot share this function.
+replace_file() {
+    local tmp="$1" file="$2"
+    cat "${tmp}" > "${file}" || { rm -f "${tmp}"; return 1; }
+    rm -f "${tmp}"
+}
+
 # --- frontmatter helpers -----------------------------------------------------
 # Operate only on the first --- block, so body text that happens to look like a
 # key is never touched.
@@ -63,7 +84,7 @@ fm_drop() {
             if (k in drop) next
         }
         { print }
-    ' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 fm_set() {
@@ -77,7 +98,7 @@ fm_set() {
             if (k==key) { print key ": " value; done=1; next }
         }
         { print }
-    ' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 # The last question in the transcript, trimmed to fit a notification.
@@ -149,12 +170,12 @@ json_get() { jq -r --arg k "$2" '.[$k] // empty' "$1" 2>/dev/null; }
 json_set() {
     local file="$1" k="$2" v="$3" tmp
     tmp="$(mktemp)"
-    jq --arg k "${k}" --arg v "${v}" '.[$k] = $v' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    jq --arg k "${k}" --arg v "${v}" '.[$k] = $v' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 json_del() {
     local file="$1" k="$2" tmp
     tmp="$(mktemp)"
-    jq --arg k "${k}" 'del(.[$k])' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    jq --arg k "${k}" 'del(.[$k])' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 # --- claude ------------------------------------------------------------------

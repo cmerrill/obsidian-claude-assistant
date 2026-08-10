@@ -106,6 +106,15 @@ else
     bashio::log.info "Vault already checked out at ${VAULT}"
 fi
 
-s6-setuidgid app mkdir -p "${VAULT}/inbox"
+# inbox/ comes from the vault, and is not created here. Git does not track empty
+# directories, so the folder needs an `inbox/.gitkeep` committed to the notes
+# repo to survive the last capture being filed — that is the vault's business,
+# not the add-on's, and creating it here would paper over a vault that is
+# actually misconfigured. Warn instead, and carry on: the triage glob is
+# nullglob, so a missing folder reads as an empty inbox rather than an error.
+if [ ! -d "${VAULT}/inbox" ]; then
+    bashio::log.warning "${VAULT}/inbox does not exist — nothing will be triaged."
+    bashio::log.warning "Commit an inbox/.gitkeep to the vault repo to hold the folder open."
+fi
 
 bashio::log.info "Configuration ready"

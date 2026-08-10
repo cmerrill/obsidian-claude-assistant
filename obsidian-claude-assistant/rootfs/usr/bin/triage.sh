@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One triage cycle.
 #
-#   quiesce -> pull -> commit raw capture -> drain replies -> triage -> push -> notify
+#   quiesce -> pull -> commit raw capture -> drain replies -> triage
+#           -> sweep finished todos -> push -> notify
 #
 # The raw capture is committed BEFORE Claude touches it, so the original note
 # survives in git history even after it is reformatted and moved.
@@ -28,6 +29,27 @@ if ! flock -n 9; then
 fi
 
 cd "${VAULT}" || exit 1
+
+# --- rewriting a file in place -----------------------------------------------
+# Every rewriter below — frontmatter and JSON alike — builds the new version in
+# a tempfile. That tempfile must never be renamed over the target: mktemp
+# creates at 0600, and mv carries the mode with it. For a vault note that turns
+# 644 into 600, so the Samba, SSH, and File editor add-ons quietly lose read
+# access to exactly the notes you interact with most — one flagged note at a
+# time, with nothing on screen to say why.
+#
+# Writing through the existing file keeps its mode, its owner, and its inode.
+# Nothing is given up by doing so: /tmp is the container's own layer and the
+# vault is a bind mount from the host, so the mv this replaces was already a
+# copy onto a truncated destination, not an atomic rename.
+#
+# todo-sweep.sh writes through the target for the same reason. It is a separate
+# script and cannot share this function.
+replace_file() {
+    local tmp="$1" file="$2"
+    cat "${tmp}" > "${file}" || { rm -f "${tmp}"; return 1; }
+    rm -f "${tmp}"
+}
 
 # --- frontmatter helpers -----------------------------------------------------
 # Operate only on the first --- block, so body text that happens to look like a
@@ -62,7 +84,7 @@ fm_drop() {
             if (k in drop) next
         }
         { print }
-    ' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 fm_set() {
@@ -76,7 +98,7 @@ fm_set() {
             if (k==key) { print key ": " value; done=1; next }
         }
         { print }
-    ' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 # The last question in the transcript, trimmed to fit a notification.
@@ -148,12 +170,12 @@ json_get() { jq -r --arg k "$2" '.[$k] // empty' "$1" 2>/dev/null; }
 json_set() {
     local file="$1" k="$2" v="$3" tmp
     tmp="$(mktemp)"
-    jq --arg k "${k}" --arg v "${v}" '.[$k] = $v' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    jq --arg k "${k}" --arg v "${v}" '.[$k] = $v' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 json_del() {
     local file="$1" k="$2" tmp
     tmp="$(mktemp)"
-    jq --arg k "${k}" 'del(.[$k])' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+    jq --arg k "${k}" 'del(.[$k])' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
 }
 
 # --- claude ------------------------------------------------------------------
@@ -346,9 +368,18 @@ NOW="$(date +%s)"
 READY=()
 WAITING=0
 for f in "${INBOX_FILES[@]}"; do
+    base="$(basename "${f}")"
+
+    # inbox/.gitkeep is what keeps the folder in the repo once the last capture
+    # has been filed — git does not track empty directories. The *.md glob above
+    # already excludes it twice over (wrong extension, and bash does not match
+    # dotfiles without dotglob); this is the explicit statement, so widening that
+    # glob later cannot quietly hand a dotfile to Claude as if it were a note.
+    case "${base}" in .*) continue ;; esac
+
     mtime="$(stat -c %Y "${f}" 2>/dev/null)"
     if [ -z "${mtime}" ] || [ $(( NOW - mtime )) -lt $(( SETTLE_MIN * 60 )) ]; then
-        log "$(basename "${f}"): edited within ${SETTLE_MIN}m, waiting for it to settle"
+        log "${base}: edited within ${SETTLE_MIN}m, waiting for it to settle"
         WAITING=$(( WAITING + 1 ))
         continue
     fi
@@ -404,7 +435,26 @@ done
 
 [ "${STUCK_NOTIFIED}" -eq 1 ] && vault_commit_and_push "Triage: park stuck notes" || true
 
-# --- 6. prune stale state ----------------------------------------------------
+# --- 6. sweep finished todos -------------------------------------------------
+# Ticking a box in Obsidian leaves the item sitting in "## Tasks", so a long
+# list slowly fills up with things that are already done. Move the finished
+# top-level ones down to "## Done".
+#
+# Runs after the inbox pass on purpose: an item filed this cycle and already
+# ticked gets swept in the same run rather than waiting for the next one.
+#
+# Deterministic shell, not a Claude call — see todo-sweep.sh for why. It costs
+# nothing on a cycle where nothing was ticked, which is most of them.
+
+SWEEP_RC=0
+/usr/bin/todo-sweep.sh || SWEEP_RC=$?
+case "${SWEEP_RC}" in
+    0) vault_commit_and_push "Todo: move finished tasks to Done" || true ;;
+    1) ;;  # nothing was ticked since the last sweep
+    *) err "todo sweep exited ${SWEEP_RC}" ;;
+esac
+
+# --- 7. prune stale state ----------------------------------------------------
 # Resolving a note often renames it — "the georgian place" becomes cheeseboat.md.
 # Drop keys for notes that are gone or no longer flagged, so these files do not
 # grow without bound.
@@ -426,7 +476,7 @@ prune_state() {
 prune_state "${STATE}/notified.json"
 prune_state "${STATE}/threads.json"
 
-# --- 7. ask about anything still flagged -------------------------------------
+# --- 8. ask about anything still flagged -------------------------------------
 # notified.json records "<round>@<epoch>": the round we last pinged about, and
 # when. The round stops an unchanged note pinging twice; the timestamp lets an
 # unanswered question come back.

@@ -45,6 +45,7 @@ RUN set -eux; \
         /usr/bin/notify.sh \
         /usr/bin/geocode.sh \
         /usr/bin/inbox-done.sh \
+        /usr/bin/todo-sweep.sh \
         /usr/bin/vault-git.sh; \
     find /etc/s6-overlay/s6-rc.d -name run -exec chmod a+x {} \; ; \
     find /etc/s6-overlay/s6-rc.d -name up -exec chmod a+x {} \;

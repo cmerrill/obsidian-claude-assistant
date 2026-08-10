@@ -7,7 +7,9 @@ Share a URL or a scrap into your Obsidian vault's `inbox/` from your phone. The
 add-on syncs the vault headlessly, works out what the note actually is, files it
 into the right folder in the right format, and commits it to git. When it isn't
 sure, it files its best guess and asks you by push notification — and you answer
-from the notification itself, as many rounds as it takes.
+from the notification itself, as many rounds as it takes. On the same schedule it
+tidies `todo/`, moving tasks you have ticked off into their note's `## Done`
+section.
 
 ## Install
 
@@ -25,6 +27,8 @@ Then install **Obsidian Claude Assistant** and follow
 - An active [Obsidian Sync](https://obsidian.md/sync) subscription, with 2FA off
 - A Claude subscription, for `claude setup-token`
 - A git remote for the vault, and a deploy key with write access
+- An `inbox/` folder in the vault, held open in git by an `inbox/.gitkeep` —
+  the add-on reads it but never creates it
 - The Home Assistant Companion app, for notifications and replies
 
 ## Note on the vault
@@ -33,6 +37,9 @@ The add-on's behaviour lives in your *vault*, not in this image:
 `.claude/commands/triage-inbox.md` and `.claude/commands/resolve-review.md`,
 alongside the `CLAUDE.md` that describes your note types. Change how triage
 works by editing those and syncing — no rebuild.
+
+The todo sweep is the one exception: moving a ticked checkbox is mechanical, so
+it lives in the image as `todo-sweep.sh` and spends no tokens.
 
 That also means this add-on assumes a vault with a `CLAUDE.md` defining your
 note types, and templates to match. It is built around one person's vault

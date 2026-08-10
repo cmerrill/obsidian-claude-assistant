@@ -32,6 +32,13 @@ case "${NAME}" in
 esac
 
 case "${NAME}" in
+    # .gitkeep is what holds inbox/ open in git once the last capture is filed.
+    # The .md rule below already covers it; named here so the refusal explains
+    # itself rather than looking like an arbitrary extension check.
+    .gitkeep)
+        echo "inbox-done: refusing '${1}' — .gitkeep keeps inbox/ in git" >&2
+        exit 1
+        ;;
     *.md) ;;
     *) echo "inbox-done: refusing '${1}' — only .md files" >&2; exit 1 ;;
 esac

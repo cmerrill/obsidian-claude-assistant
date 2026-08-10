@@ -347,9 +347,18 @@ NOW="$(date +%s)"
 READY=()
 WAITING=0
 for f in "${INBOX_FILES[@]}"; do
+    base="$(basename "${f}")"
+
+    # inbox/.gitkeep is what keeps the folder in the repo once the last capture
+    # has been filed — git does not track empty directories. The *.md glob above
+    # already excludes it twice over (wrong extension, and bash does not match
+    # dotfiles without dotglob); this is the explicit statement, so widening that
+    # glob later cannot quietly hand a dotfile to Claude as if it were a note.
+    case "${base}" in .*) continue ;; esac
+
     mtime="$(stat -c %Y "${f}" 2>/dev/null)"
     if [ -z "${mtime}" ] || [ $(( NOW - mtime )) -lt $(( SETTLE_MIN * 60 )) ]; then
-        log "$(basename "${f}"): edited within ${SETTLE_MIN}m, waiting for it to settle"
+        log "${base}: edited within ${SETTLE_MIN}m, waiting for it to settle"
         WAITING=$(( WAITING + 1 ))
         continue
     fi

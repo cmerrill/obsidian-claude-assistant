@@ -158,6 +158,17 @@ that — the single-line field flattens the newlines.
 3. Fill in the options above.
 4. Start it, and watch the log.
 
+The vault must already contain an `inbox/` folder — the add-on does not create
+one. Git does not track empty directories, so commit an `inbox/.gitkeep` to the
+notes repo to hold the folder open once the last capture has been filed;
+otherwise `inbox/` disappears from the repo and from every other clone. If the
+folder is missing at start, the log says so and nothing is ever triaged.
+
+Nothing in the add-on touches `.gitkeep`. Every scan of `inbox/` globs `*.md`,
+dotfiles are skipped explicitly, and `inbox-done.sh` refuses to delete it.
+Obsidian does not sync dotfiles either, so it stays a git-side artefact and
+never appears on your phone.
+
 First start clones the repo into `/share/notes`, then links it to your remote
 Sync vault. Do this when both sides already agree — a first-run reconcile between
 two divergent copies is not something you want to debug.
@@ -171,7 +182,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 |---|---|---|
 | `interval_minutes` | `10` | Poll interval. A reply wakes the loop immediately regardless. |
 | `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit, and against sweeping a `todo/` note someone is editing. `0` disables the wait. |
-| `model` | `opus` | `sonnet` is cheaper and usually fine for well-formed captures. |
+| `model` | `sonnet` | Cheap, and usually fine for well-formed captures. Set `opus` if triage keeps guessing the type wrong. |
 | `notify_on` | `questions` | `always`, `questions`, or `errors`. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
 | `renotify_after_minutes` | `60` | Re-send a still-unanswered question after this long. `0` disables re-asking. |
@@ -260,6 +271,10 @@ costs nothing. **Looks good** costs nothing. The todo sweep is shell, so it
 costs nothing either — on any cycle, whether or not it moves something.
 
 ## Troubleshooting
+
+**Nothing is ever triaged** — check the log for `does not exist` at start. The
+add-on does not create `inbox/`; if git dropped the folder when the last capture
+was filed, add it back with an `inbox/.gitkeep` committed to the notes repo.
 
 **Nothing is syncing** — check the log for `logging in as …`. A login failure
 almost always means 2FA is enabled on the account. To force a re-link, run

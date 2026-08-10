@@ -27,6 +27,8 @@ Then install **Obsidian Claude Assistant** and follow
 - An active [Obsidian Sync](https://obsidian.md/sync) subscription, with 2FA off
 - A Claude subscription, for `claude setup-token`
 - A git remote for the vault, and a deploy key with write access
+- An `inbox/` folder in the vault, held open in git by an `inbox/.gitkeep` —
+  the add-on reads it but never creates it
 - The Home Assistant Companion app, for notifications and replies
 
 ## Note on the vault

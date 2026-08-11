@@ -1,11 +1,12 @@
 name: Obsidian Claude Assistant
 slug: obsidian_claude_assistant
-version: "0.5.0"
+version: "0.6.0"
 description: >-
   Syncs an Obsidian vault headlessly, then files anything dropped in inbox/ into
   the right note type and folder with Claude Code. Asks by push notification when
-  it is unsure, and accepts your reply from the notification. Keeps todo/ tidy by
-  moving finished tasks into their note's Done section.
+  it is unsure, and accepts your reply from the notification or from its web
+  page, where you can also paste long text, upload files, and drop new captures.
+  Keeps todo/ tidy by moving finished tasks into their note's Done section.
 url: https://github.com/cmerrill/obsidian-claude-assistant
 arch:
   - aarch64
@@ -14,6 +15,10 @@ init: false
 startup: application
 boot: auto
 homeassistant_api: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:message-question-outline
+panel_title: Claude Assistant
 map:
   - type: share
     read_only: false
@@ -35,9 +40,7 @@ options:
   notify_service: ""
   notify_on: questions
   enable_replies: true
-  renotify_after_minutes: 60
   max_notifications_per_cycle: 3
-  max_review_rounds: 5
   log_level: info
 schema:
   obsidian_email: email
@@ -57,7 +60,5 @@ schema:
   notify_service: str?
   notify_on: list(always|questions|errors)
   enable_replies: bool
-  renotify_after_minutes: int(0,10080)
   max_notifications_per_cycle: int(1,10)
-  max_review_rounds: int(1,20)
   log_level: list(trace|debug|info|notice|warning|error|fatal)

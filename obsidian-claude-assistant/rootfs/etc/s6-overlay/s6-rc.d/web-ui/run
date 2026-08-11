@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck source=/dev/null
+. /data/env.sh
+
+exec s6-setuidgid app node /usr/bin/web-ui.js

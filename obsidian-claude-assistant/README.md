@@ -3,8 +3,9 @@
 Keeps an Obsidian vault synced headlessly, then files anything you drop in
 `inbox/` into the right note type and folder using Claude Code. Commits and
 pushes to GitHub as a backup. Asks by push notification when it is unsure, and
-takes your answer straight from the notification. Sweeps finished tasks out of
-`todo/` lists on the same schedule.
+takes your answer straight from the notification — or from its web page in the
+Home Assistant sidebar, where long answers, pasted pages, and file uploads fit.
+Sweeps finished tasks out of `todo/` lists on the same schedule.
 
 ## How it works
 
@@ -32,9 +33,15 @@ Android (Obsidian mobile)
             |  tap Answer, type a few words
             v
 [3] reply-listener  --websocket-->  supervisor/core/websocket
+
+      HA sidebar / notification tap
+            |  ingress
+            v
+[4] web-ui  ->  same replies queue as [3], plus uploads into attachments/
+                and captures into inbox/
 ```
 
-Three independent s6 services. One can crash and restart without disturbing the
+Four independent s6 services. One can crash and restart without disturbing the
 others.
 
 **The shell owns git and Obsidian Sync; Claude only writes note content.** Claude
@@ -183,11 +190,9 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | `interval_minutes` | `10` | Poll interval. A reply wakes the loop immediately regardless. |
 | `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit, and against sweeping a `todo/` note someone is editing. `0` disables the wait. |
 | `model` | `sonnet` | Cheap, and usually fine for well-formed captures. Set `opus` if triage keeps guessing the type wrong. |
-| `notify_on` | `questions` | `always`, `questions`, or `errors`. |
+| `notify_on` | `questions` | `errors` = only failures. `questions` = failures + flagged notes. `always` = those plus a notice when work completes: "Filed N note(s)" after a triage, "Applied your reply" after an answer. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
-| `renotify_after_minutes` | `60` | Re-send a still-unanswered question after this long. `0` disables re-asking. |
 | `max_notifications_per_cycle` | `3` | Stops a large batch from spamming your phone. |
-| `max_review_rounds` | `5` | After this many rounds on one note, it gives up and says so. |
 | `vault_path` | `/share/notes` | |
 
 ## The reply loop
@@ -208,17 +213,50 @@ The notification `tag` stays constant across rounds, so Android replaces it
 rather than stacking. One live notification per note, updating as the
 conversation moves.
 
-**Tapping the notification body does nothing.** On Android it is marked
-`sticky` with `clickAction: noAction`, so a stray tap neither opens the app nor
-dismisses the question — only one of the three actions above does. Answering it
-(with **Answer** or **Looks good**) clears the notification for you.
+**Tapping the notification body opens the add-on's web page**, where the same
+question sits with a full reply box. On Android the notification is also
+`sticky`, so the tap doesn't dismiss it — answering (with **Answer**, **Looks
+good**, or from the page) clears it for you.
 
-**An unanswered question comes back.** If none of the three actions has been
-used after `renotify_after_minutes`, the same question is re-sent, titled
-"still waiting". This also covers a notification lost to a swipe, a phone that
-was off, or an app update. Set `renotify_after_minutes: 0` to turn it off.
+**A question is never re-sent, and never expires.** You get exactly one
+notification per round. A notification lost to a swipe, a phone that was off,
+or an app update costs nothing: the question stays on the web page until you
+answer it there. (Earlier versions re-sent "still waiting" reminders and gave
+up after a round cap — both existed only because a lost notification used to
+mean a lost question.)
 
 Add a `Needs Review.base` view to the vault to see everything flagged at once.
+
+## The web page
+
+The add-on serves a small page through Home Assistant ingress — it appears as
+**Claude Assistant** in the sidebar and in the Companion app, works wherever
+your HA does (including remote access), and needs no open ports or extra
+login. It is the durable record of everything still waiting on you:
+
+- **Every open question**, with its full `## Open questions` text — no
+  notification-length truncation — a big reply box for pasted pages of text,
+  file upload, and the same **Looks good** / **Stop asking** buttons.
+- **A drop box**: paste text and/or upload files with an optional title, and
+  it lands in `inbox/` as a fresh capture for the next triage cycle.
+
+Uploads go to `attachments/` in the vault, so git backs them up and Obsidian
+Sync carries them to your other devices — for binaries that requires the
+vault's **Sync all other types** setting; git backs them up regardless. Claude
+reads them with its `Read` tool (PDFs included), so "the page you couldn't
+fetch" can be answered with a printout of it.
+
+Each upload has a **delete after processing** checkbox. Ticked files are
+removed by the add-on — not by Claude — once their note is dealt with: for a
+reply, when the question is resolved, confirmed, or stopped; for a drop-box
+capture, when it has been filed. A note still mid-conversation keeps its
+files. Deleted files remain in git history (they were committed on arrival),
+so ticking the box is about clutter, not risk. An upload abandoned before its
+submit button was pressed just sits in `attachments/` — harmless, and yours to
+remove.
+
+A reply longer than ~4 KB is saved into `attachments/` as a file and handed to
+Claude as a path instead of inline text; this is invisible in use.
 
 ## The todo sweep
 
@@ -285,6 +323,14 @@ almost always means 2FA is enabled on the account. To force a re-link, run
 **No notifications** — confirm `notify_service` matches a real
 `notify.mobile_app_*` action in Developer Tools.
 
+**The web page shows 403** — only Home Assistant's ingress proxy may talk to
+it. Open it through the sidebar or the Companion app, not by dialing the
+container's port directly.
+
+**Tapping a question notification does nothing** — the add-on could not
+resolve its own slug at start (the init log will show a warning). Restart the
+add-on; until then the page is still reachable from the sidebar.
+
 **Replies never arrive** — check the log for `authenticated, subscribing`. If the
 supervisor websocket is refused, fall back to an HA automation on
 `mobile_app_notification_action` that appends the same JSON line to
@@ -317,9 +363,10 @@ included in add-on backups:
 |---|---|
 | `home/` | `$HOME` for the service user: the deploy key, `.gitconfig`, and whatever `ob` caches after login. Deliberately here and not in the image, which a restart or update would wipe |
 | `env.sh` | Resolved options and secrets |
-| `replies.jsonl` | Queued notification actions |
+| `replies.jsonl` | Queued answers, from notification actions and the web page alike |
 | `attempts.json` | Per-file failure counts for the stuck check |
 | `notified.json` | Last round notified per note, so nothing pings twice |
+| `ephemeral.json` | Uploads marked "delete after processing", keyed by the note that owns them |
 | `threads.json` | Claude session id per note, for conversation resume |
 | `geocode-cache.json` | Address → coordinates, so a repeated address costs no request |
 | `last-run.json` | Full JSON output of the most recent Claude run |

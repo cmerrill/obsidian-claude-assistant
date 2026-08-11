@@ -50,14 +50,24 @@ else
         ACTIONS='[]'
     fi
 
-    # Android only, and only worth it for a question:
-    #   sticky      keep the notification when it is selected
-    #   clickAction tapping the body does nothing at all
-    # Without these a stray tap opens the app AND dismisses the question, which
-    # leaves no way to answer it. An error or gave-up notice keeps the default
-    # tap-to-open, since there is nothing to answer.
+    # Tapping a question opens the add-on's ingress page, where the question
+    # is listed with a full reply box and file upload. clickAction is the
+    # Android key and url is the iOS one — send both, each platform ignores
+    # the other's. Both accept a relative frontend path, and relative is the
+    # only correct form: an absolute URL opens the browser, not the app.
+    #
+    # sticky is Android-only: keep the notification up when it is tapped, so
+    # answering stays possible from the shade too. If the slug lookup failed
+    # at startup the path is empty, and tap falls back to doing nothing at
+    # all — never to open-and-dismiss, which would lose the question. An
+    # error notice keeps the default tap-to-open-app.
     if [ "${MODE}" = "ask" ]; then
-        TAP='{ "sticky": "true", "clickAction": "noAction" }'
+        if [ -n "${INGRESS_PANEL_PATH:-}" ]; then
+            TAP="$(jq -n --arg u "${INGRESS_PANEL_PATH}" \
+                '{ sticky: "true", clickAction: $u, url: $u }')"
+        else
+            TAP='{ "sticky": "true", "clickAction": "noAction" }'
+        fi
     else
         TAP='{}'
     fi

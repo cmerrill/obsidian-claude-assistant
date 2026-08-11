@@ -326,6 +326,10 @@ if [ -s "${REPLIES}" ]; then
             if run_claude "/resolve-review ${note} — replies in order: ${texts}" "${session}"; then
                 echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
                 [ -n "${CLAUDE_SESSION}" ] && json_set "${STATE}/threads.json" "${note}" "${CLAUDE_SESSION}"
+                # The shared :done tag makes completion notices replace each
+                # other instead of stacking up in the shade.
+                [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
+                    "obsidian-claude-assistant:done" "Applied your reply" "${note}" || true
             else
                 /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
                     "Triage error" "Couldn't apply your reply to ${note}. Check the add-on log."
@@ -398,6 +402,8 @@ else
     if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
         vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
+        [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
+            "obsidian-claude-assistant:done" "Filed ${#READY[@]} note(s)" "${names}" || true
     else
         /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
             "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
@@ -476,22 +482,83 @@ prune_state() {
 prune_state "${STATE}/notified.json"
 prune_state "${STATE}/threads.json"
 
+# --- 7b. delete processed ephemeral attachments ------------------------------
+# Files uploaded through the web page with "delete after processing" ticked.
+# ephemeral.json maps an owner note to the files it brought along; once the
+# owner is dealt with, the files have served their purpose.
+#
+# Deterministic shell, like todo-sweep — deletion is not a job to hand the
+# model, and inbox-done.sh deliberately cannot touch attachments/. An owner is
+# done when its note is gone (capture filed and removed), unflagged (question
+# resolved or confirmed), or review-stopped (user said stop). A note still
+# mid-conversation keeps its files: a later round may still need them.
+
+cleanup_ephemeral() {
+    local owners owner files f base target resolved_dir att_dir
+    EPHEMERAL_DELETED=0
+    owners="$(jq -r 'keys[]' "${STATE}/ephemeral.json" 2>/dev/null)"
+    [ -z "${owners}" ] && return 0
+    att_dir="$(cd "${VAULT}/attachments" 2>/dev/null && pwd -P)" || return 0
+
+    while IFS= read -r owner; do
+        owner="${owner%$'\r'}"
+        [ -z "${owner}" ] && continue
+
+        if [ -f "${VAULT}/${owner}" ]; then
+            [ "$(fm_get "${VAULT}/${owner}" 'needs-review')" = "true" ] \
+                && [ "$(fm_get "${VAULT}/${owner}" 'review-stopped')" != "true" ] \
+                && continue
+        else
+            # A capture parked in inbox/stuck/ was never processed — its
+            # attachment is still the only copy of whatever it carried.
+            case "${owner}" in
+                inbox/*)
+                    [ -f "${VAULT}/inbox/stuck/$(basename "${owner}")" ] && continue
+                    ;;
+            esac
+        fi
+
+        # Same discipline as inbox-done.sh: constrain the name, then check
+        # where the path really resolves before rm.
+        files="$(jq -r --arg k "${owner}" '.[$k][]?' "${STATE}/ephemeral.json" 2>/dev/null)"
+        while IFS= read -r f; do
+            f="${f%$'\r'}"
+            case "${f}" in attachments/*) ;; *) continue ;; esac
+            base="${f#attachments/}"
+            case "${base}" in */*|.*|"") continue ;; esac
+            target="${VAULT}/attachments/${base}"
+            { [ -f "${target}" ] && [ ! -L "${target}" ]; } || continue
+            resolved_dir="$(cd "$(dirname "${target}")" && pwd -P)"
+            [ "${resolved_dir}" = "${att_dir}" ] || continue
+            if rm -- "${target}"; then
+                log "cleanup: removed ${f} (${owner} is done)"
+                EPHEMERAL_DELETED=1
+            fi
+        done <<< "${files}"
+
+        json_del "${STATE}/ephemeral.json" "${owner}"
+    done <<< "${owners}"
+}
+
+if [ -f "${STATE}/ephemeral.json" ]; then
+    cleanup_ephemeral
+    [ "${EPHEMERAL_DELETED}" -eq 1 ] && vault_commit_and_push "Cleanup: removed processed attachments" || true
+fi
+
 # --- 8. ask about anything still flagged -------------------------------------
-# notified.json records "<round>@<epoch>": the round we last pinged about, and
-# when. The round stops an unchanged note pinging twice; the timestamp lets an
-# unanswered question come back.
+# One notification per round, and that is all. The web page is the durable
+# record of open questions — a dismissed, swiped, or never-seen notification
+# costs nothing, because the question stays on the page until it is answered.
+# Rounds only advance when a reply is processed, so once-per-round is
+# naturally finite: no re-ask timer, no give-up cap. (Both used to exist,
+# solely because a lost notification once meant a lost question.)
 #
-# A notification is easy to lose — a stray tap used to open the app and dismiss
-# it, a swipe still does, and a phone that was off never saw it. Without a
-# re-ask the note stays flagged in the vault and is never mentioned again.
-#
-# Two things to know about the timer: a re-ask spends one of the
-# MAX_NOTIFICATIONS slots for the cycle, and the delay rounds up to the next
-# interval_minutes tick, because this section only runs inside a cycle.
+# notified.json still records "<round>@<epoch>". Nothing reads the epoch any
+# more, but keeping the format means no state migration on upgrade and a
+# clean rollback.
 
 [ "${NOTIFY_ON}" = "errors" ] && exit 0
 
-RENOTIFY_AFTER_MINUTES="${RENOTIFY_AFTER_MINUTES:-60}"
 now="$(date +%s)"
 
 sent=0
@@ -502,23 +569,10 @@ while IFS= read -r note; do
     round="$(fm_get "${note}" 'review-round')"
     round="${round:-1}"
 
-    # A value with no @ predates the timer. Treat it as never-timestamped, so
-    # each still-open question is re-asked once after the upgrade.
+    # Strip the epoch if present; pre-upgrade values without one compare as-is.
     prev="$(json_get "${STATE}/notified.json" "${note}")"
-    case "${prev}" in
-        *@*) prev_round="${prev%@*}"; prev_ts="${prev##*@}" ;;
-        *)   prev_round="${prev}";    prev_ts=0 ;;
-    esac
-    case "${prev_ts}" in ''|*[!0-9]*) prev_ts=0 ;; esac
-
-    repeat=0
-    if [ -n "${prev_round}" ] && [ "${prev_round}" = "${round}" ]; then
-        # Already given up on this one — say it once, then leave it alone.
-        [ "${round}" -ge "${MAX_REVIEW_ROUNDS}" ] && continue
-        [ "${RENOTIFY_AFTER_MINUTES}" -eq 0 ] && continue
-        [ $(( now - prev_ts )) -lt $(( RENOTIFY_AFTER_MINUTES * 60 )) ] && continue
-        repeat=1
-    fi
+    prev_round="${prev%@*}"
+    [ -n "${prev_round}" ] && [ "${prev_round}" = "${round}" ] && continue
 
     question="$(last_question "${note}")"
     [ -z "${question}" ] && question="Needs a look — no question recorded."
@@ -530,16 +584,8 @@ while IFS= read -r note; do
     log "${note}: notifying with ${#question}-char question"
 
     name="$(basename "${note}" .md)"
-    if [ "${round}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
-        /usr/bin/notify.sh plain "obsidian-claude-assistant:${note}" \
-            "Gave up: ${name}" "${question}"
-    elif [ "${repeat}" -eq 1 ]; then
-        /usr/bin/notify.sh ask "obsidian-claude-assistant:${note}" \
-            "${name} (round ${round}, still waiting)" "${question}"
-    else
-        /usr/bin/notify.sh ask "obsidian-claude-assistant:${note}" \
-            "${name} (round ${round})" "${question}"
-    fi
+    /usr/bin/notify.sh ask "obsidian-claude-assistant:${note}" \
+        "${name} (round ${round})" "${question}"
 
     json_set "${STATE}/notified.json" "${note}" "${round}@${now}"
     sent=$(( sent + 1 ))

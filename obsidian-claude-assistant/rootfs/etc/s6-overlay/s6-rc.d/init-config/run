@@ -43,6 +43,20 @@ chmod 600 "${SSH_DIR}/id_ed25519"
 
 # --- shared environment ------------------------------------------------------
 
+# The ingress panel lives at /hassio/ingress/<slug>, but the installed slug is
+# repo-prefixed (e.g. a1b2c3d4_obsidian_claude_assistant), so it has to be
+# asked for rather than hardcoded. Resolved once here; notify.sh reads the
+# result from env.sh. Empty on failure — notifications then degrade to the old
+# tap-does-nothing behavior instead of tap-opens-a-wrong-page.
+ADDON_SLUG="$(curl -sf -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+    http://supervisor/addons/self/info | jq -r '.data.slug // empty')" || ADDON_SLUG=""
+INGRESS_PANEL_PATH=""
+if [ -n "${ADDON_SLUG}" ]; then
+    INGRESS_PANEL_PATH="/hassio/ingress/${ADDON_SLUG}"
+else
+    bashio::log.warning "Could not resolve the add-on slug — notification taps will do nothing"
+fi
+
 cat > /data/env.sh <<EOF
 export VAULT="${VAULT}"
 export GIT_BRANCH="$(bashio::config 'git_branch')"
@@ -54,9 +68,8 @@ export INBOX_SETTLE_MINUTES="$(bashio::config 'inbox_settle_minutes')"
 export NOTIFY_SERVICE="$(bashio::config 'notify_service')"
 export NOTIFY_ON="$(bashio::config 'notify_on')"
 export ENABLE_REPLIES="$(bashio::config 'enable_replies')"
-export RENOTIFY_AFTER_MINUTES="$(bashio::config 'renotify_after_minutes')"
 export MAX_NOTIFICATIONS="$(bashio::config 'max_notifications_per_cycle')"
-export MAX_REVIEW_ROUNDS="$(bashio::config 'max_review_rounds')"
+export INGRESS_PANEL_PATH="${INGRESS_PANEL_PATH}"
 export OBSIDIAN_VAULT_NAME="$(bashio::config 'obsidian_vault_name')"
 export OBSIDIAN_EMAIL="$(bashio::config 'obsidian_email')"
 export OBSIDIAN_PASSWORD="$(bashio::config 'obsidian_password')"
@@ -89,6 +102,7 @@ touch /data/wake /data/replies.jsonl
 [ -f /data/attempts.json ] || echo '{}' > /data/attempts.json
 [ -f /data/notified.json ] || echo '{}' > /data/notified.json
 [ -f /data/threads.json ] || echo '{}' > /data/threads.json
+[ -f /data/ephemeral.json ] || echo '{}' > /data/ephemeral.json
 
 chown -R 1000:1000 /data "${VAULT}"
 

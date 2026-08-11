@@ -50,7 +50,8 @@ RUN set -eux; \
     find /etc/s6-overlay/s6-rc.d -name run -exec chmod a+x {} \; ; \
     find /etc/s6-overlay/s6-rc.d -name up -exec chmod a+x {} \;
 
+# No io.hass.version label: config.yaml is the source of truth, and a copy
+# here was already stale once.
 LABEL io.hass.name="Obsidian Claude Assistant" \
       io.hass.description="Headless Obsidian Sync plus Claude Code inbox triage" \
-      io.hass.type="addon" \
-      io.hass.version="0.3.0"
+      io.hass.type="addon"

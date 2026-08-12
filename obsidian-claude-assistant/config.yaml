@@ -1,6 +1,6 @@
 name: Obsidian Claude Assistant
 slug: obsidian_claude_assistant
-version: "0.6.0"
+version: "0.6.3"
 description: >-
   Syncs an Obsidian vault headlessly, then files anything dropped in inbox/ into
   the right note type and folder with Claude Code. Asks by push notification when

@@ -149,6 +149,26 @@ last_question() {
     printf '%s…' "${head}"
 }
 
+# Strip the "## Open questions" section wholesale: the heading through the
+# next heading (level 1 or 2) or end of file. Mirrors openQuestions() in
+# web-ui.js, which reads the same boundaries to display the section on the
+# web page — this is its counterpart for removal, used once a note is
+# confirmed and its questions no longer apply.
+#
+# Collapses a run of blank lines left where the section used to sit, so
+# confirming a note doesn't leave a widening gap behind.
+drop_open_questions() {
+    local file="$1"
+    local tmp; tmp="$(mktemp)"
+    awk '
+        { sub(/\r$/, "") }
+        !inside && tolower($0) ~ /^##[ \t]+open questions[ \t]*$/ { inside = 1; next }
+        inside && $0 ~ /^##?[ \t]/ { inside = 0 }
+        inside { next }
+        { if ($0 == "" && prev_blank) next; print; prev_blank = ($0 == "") }
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
+}
+
 # Notes still awaiting an answer, excluding ones the user told us to drop.
 #
 # grep only narrows the candidate list — .claude/commands and templates/ both
@@ -326,10 +346,17 @@ if [ -s "${REPLIES}" ]; then
             if run_claude "/resolve-review ${note} — replies in order: ${texts}" "${session}"; then
                 echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
                 [ -n "${CLAUDE_SESSION}" ] && json_set "${STATE}/threads.json" "${note}" "${CLAUDE_SESSION}"
-                # The shared :done tag makes completion notices replace each
-                # other instead of stacking up in the shade.
-                [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
-                    "obsidian-claude-assistant:done" "Applied your reply" "${note}" || true
+                # Skip the "applied" notice if the reply left the note still
+                # flagged — step 8 sends a fresh question for it later in this
+                # same cycle, and firing both doubles up under notify_on=always.
+                if [ ! -f "${VAULT}/${note}" ] \
+                    || [ "$(fm_get "${VAULT}/${note}" 'needs-review')" != "true" ] \
+                    || [ "$(fm_get "${VAULT}/${note}" 'review-stopped')" = "true" ]; then
+                    # The shared :done tag makes completion notices replace
+                    # each other instead of stacking up in the shade.
+                    [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
+                        "obsidian-claude-assistant:done" "Applied your reply" "${note}" || true
+                fi
             else
                 /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
                     "Triage error" "Couldn't apply your reply to ${note}. Check the add-on log."
@@ -339,6 +366,7 @@ if [ -s "${REPLIES}" ]; then
             # Deterministic: no Claude call, no tokens.
             log "${note}: confirmed, clearing flag"
             fm_drop "${note}" 'needs-review' 'review-round'
+            drop_open_questions "${note}"
             json_del "${STATE}/notified.json" "${note}"
             json_del "${STATE}/threads.json" "${note}"
         fi
@@ -399,16 +427,39 @@ else
     names="${names%, }"
 
     log "triaging ${#READY[@]} note(s): ${names}"
+
+    # A batch of exactly one note can be checked without ambiguity: anything
+    # newly flagged after processing it has to be that note. A batch of two
+    # or more can't be attributed this way — triage may rename a capture on
+    # the way in (README: "the georgian place" -> cheeseboat.md), so there is
+    # no reliable link from an original inbox name back to which flagged note
+    # it became. So only the single-note case is de-duplicated against its
+    # own question notification in step 8; a multi-note batch always gets the
+    # "Filed" notice, same as before.
+    if [ "${#READY[@]}" -eq 1 ]; then
+        before_flagged="$(mktemp)"
+        flagged_notes | sort > "${before_flagged}"
+    fi
+
     if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
         vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
-        [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
-            "obsidian-claude-assistant:done" "Filed ${#READY[@]} note(s)" "${names}" || true
+
+        if [ "${NOTIFY_ON}" = "always" ]; then
+            send_notice=1
+            if [ "${#READY[@]}" -eq 1 ]; then
+                new_flagged_count="$(comm -13 "${before_flagged}" <(flagged_notes | sort) | grep -c .)"
+                [ "${new_flagged_count}" -gt 0 ] && send_notice=0
+            fi
+            [ "${send_notice}" -eq 1 ] && /usr/bin/notify.sh plain \
+                "obsidian-claude-assistant:done" "Filed ${#READY[@]} note(s)" "${names}"
+        fi
     else
         /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
             "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
         # Leave the files in place; the stuck counter below decides when to give up.
     fi
+    [ "${#READY[@]}" -eq 1 ] && rm -f "${before_flagged}"
 fi
 
 # --- 5. stuck files ----------------------------------------------------------

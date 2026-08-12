@@ -428,48 +428,38 @@ else
 
     log "triaging ${#READY[@]} note(s): ${names}"
 
-    # Snapshot which notes are flagged before this run. A note this batch
-    # newly flags gets its own question notification in step 8 later in this
-    # same cycle, so it should not also be counted into "Filed" below — or
-    # notify_on=always fires twice for it.
-    before_flagged="$(mktemp)"
-    flagged_notes | sort > "${before_flagged}"
+    # A batch of exactly one note can be checked without ambiguity: anything
+    # newly flagged after processing it has to be that note. A batch of two
+    # or more can't be attributed this way — triage may rename a capture on
+    # the way in (README: "the georgian place" -> cheeseboat.md), so there is
+    # no reliable link from an original inbox name back to which flagged note
+    # it became. So only the single-note case is de-duplicated against its
+    # own question notification in step 8; a multi-note batch always gets the
+    # "Filed" notice, same as before.
+    if [ "${#READY[@]}" -eq 1 ]; then
+        before_flagged="$(mktemp)"
+        flagged_notes | sort > "${before_flagged}"
+    fi
 
     if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
         vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
 
         if [ "${NOTIFY_ON}" = "always" ]; then
-            after_flagged="$(mktemp)"
-            flagged_notes | sort > "${after_flagged}"
-            new_flagged_count="$(comm -13 "${before_flagged}" "${after_flagged}" | grep -c .)"
-            rm -f "${after_flagged}"
-
-            filed_count=$(( ${#READY[@]} - new_flagged_count ))
-            [ "${filed_count}" -lt 0 ] && filed_count=0
-
-            if [ "${filed_count}" -eq "${#READY[@]}" ]; then
-                # Common case, nothing in the batch needs review: unchanged.
-                /usr/bin/notify.sh plain \
-                    "obsidian-claude-assistant:done" "Filed ${filed_count} note(s)" "${names}"
-            elif [ "${filed_count}" -gt 0 ]; then
-                # Triage can rename a capture on the way in (README: "the
-                # georgian place" -> cheeseboat.md), so there is no reliable
-                # way from here to say which original name became which
-                # flagged note — count only, no name list, in the mixed case.
-                /usr/bin/notify.sh plain "obsidian-claude-assistant:done" \
-                    "Filed ${filed_count} note(s)" \
-                    "${new_flagged_count} more need your input — see next notification"
+            send_notice=1
+            if [ "${#READY[@]}" -eq 1 ]; then
+                new_flagged_count="$(comm -13 "${before_flagged}" <(flagged_notes | sort) | grep -c .)"
+                [ "${new_flagged_count}" -gt 0 ] && send_notice=0
             fi
-            # filed_count -eq 0: every note in the batch needs review; skip
-            # this notice entirely, the per-note question notifications cover it.
+            [ "${send_notice}" -eq 1 ] && /usr/bin/notify.sh plain \
+                "obsidian-claude-assistant:done" "Filed ${#READY[@]} note(s)" "${names}"
         fi
     else
         /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
             "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
         # Leave the files in place; the stuck counter below decides when to give up.
     fi
-    rm -f "${before_flagged}"
+    [ "${#READY[@]}" -eq 1 ] && rm -f "${before_flagged}"
 fi
 
 # --- 5. stuck files ----------------------------------------------------------

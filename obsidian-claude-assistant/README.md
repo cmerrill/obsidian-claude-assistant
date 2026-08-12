@@ -190,7 +190,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | `interval_minutes` | `10` | Poll interval. A reply wakes the loop immediately regardless. |
 | `inbox_settle_minutes` | `2` | A note is skipped until it has been untouched this long. Guards against filing a capture mid-edit, and against sweeping a `todo/` note someone is editing. `0` disables the wait. |
 | `model` | `sonnet` | Cheap, and usually fine for well-formed captures. Set `opus` if triage keeps guessing the type wrong. |
-| `notify_on` | `questions` | `errors` = only failures. `questions` = failures + flagged notes. `always` = those plus a notice when work completes: "Filed N note(s)" after a triage, "Applied your reply" after an answer. |
+| `notify_on` | `questions` | `errors` = only failures. `questions` = failures + flagged notes. `always` = those plus a notice when work completes: "Filed N note(s)" after a triage, "Applied your reply" after an answer. Suppressed for a note that comes out of the run still needing review — its question notification covers that instead, so you don't get both. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
 | `max_notifications_per_cycle` | `3` | Stops a large batch from spamming your phone. |
 | `vault_path` | `/share/notes` | |

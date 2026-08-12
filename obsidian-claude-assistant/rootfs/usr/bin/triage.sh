@@ -346,10 +346,17 @@ if [ -s "${REPLIES}" ]; then
             if run_claude "/resolve-review ${note} — replies in order: ${texts}" "${session}"; then
                 echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
                 [ -n "${CLAUDE_SESSION}" ] && json_set "${STATE}/threads.json" "${note}" "${CLAUDE_SESSION}"
-                # The shared :done tag makes completion notices replace each
-                # other instead of stacking up in the shade.
-                [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
-                    "obsidian-claude-assistant:done" "Applied your reply" "${note}" || true
+                # Skip the "applied" notice if the reply left the note still
+                # flagged — step 8 sends a fresh question for it later in this
+                # same cycle, and firing both doubles up under notify_on=always.
+                if [ ! -f "${VAULT}/${note}" ] \
+                    || [ "$(fm_get "${VAULT}/${note}" 'needs-review')" != "true" ] \
+                    || [ "$(fm_get "${VAULT}/${note}" 'review-stopped')" = "true" ]; then
+                    # The shared :done tag makes completion notices replace
+                    # each other instead of stacking up in the shade.
+                    [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
+                        "obsidian-claude-assistant:done" "Applied your reply" "${note}" || true
+                fi
             else
                 /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
                     "Triage error" "Couldn't apply your reply to ${note}. Check the add-on log."
@@ -420,16 +427,49 @@ else
     names="${names%, }"
 
     log "triaging ${#READY[@]} note(s): ${names}"
+
+    # Snapshot which notes are flagged before this run. A note this batch
+    # newly flags gets its own question notification in step 8 later in this
+    # same cycle, so it should not also be counted into "Filed" below — or
+    # notify_on=always fires twice for it.
+    before_flagged="$(mktemp)"
+    flagged_notes | sort > "${before_flagged}"
+
     if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
         vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
-        [ "${NOTIFY_ON}" = "always" ] && /usr/bin/notify.sh plain \
-            "obsidian-claude-assistant:done" "Filed ${#READY[@]} note(s)" "${names}" || true
+
+        if [ "${NOTIFY_ON}" = "always" ]; then
+            after_flagged="$(mktemp)"
+            flagged_notes | sort > "${after_flagged}"
+            new_flagged_count="$(comm -13 "${before_flagged}" "${after_flagged}" | grep -c .)"
+            rm -f "${after_flagged}"
+
+            filed_count=$(( ${#READY[@]} - new_flagged_count ))
+            [ "${filed_count}" -lt 0 ] && filed_count=0
+
+            if [ "${filed_count}" -eq "${#READY[@]}" ]; then
+                # Common case, nothing in the batch needs review: unchanged.
+                /usr/bin/notify.sh plain \
+                    "obsidian-claude-assistant:done" "Filed ${filed_count} note(s)" "${names}"
+            elif [ "${filed_count}" -gt 0 ]; then
+                # Triage can rename a capture on the way in (README: "the
+                # georgian place" -> cheeseboat.md), so there is no reliable
+                # way from here to say which original name became which
+                # flagged note — count only, no name list, in the mixed case.
+                /usr/bin/notify.sh plain "obsidian-claude-assistant:done" \
+                    "Filed ${filed_count} note(s)" \
+                    "${new_flagged_count} more need your input — see next notification"
+            fi
+            # filed_count -eq 0: every note in the batch needs review; skip
+            # this notice entirely, the per-note question notifications cover it.
+        fi
     else
         /usr/bin/notify.sh plain "obsidian-claude-assistant:error" \
             "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
         # Leave the files in place; the stuck counter below decides when to give up.
     fi
+    rm -f "${before_flagged}"
 fi
 
 # --- 5. stuck files ----------------------------------------------------------

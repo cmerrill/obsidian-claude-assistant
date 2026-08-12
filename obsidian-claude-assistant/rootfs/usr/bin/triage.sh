@@ -149,6 +149,26 @@ last_question() {
     printf '%s…' "${head}"
 }
 
+# Strip the "## Open questions" section wholesale: the heading through the
+# next heading (level 1 or 2) or end of file. Mirrors openQuestions() in
+# web-ui.js, which reads the same boundaries to display the section on the
+# web page — this is its counterpart for removal, used once a note is
+# confirmed and its questions no longer apply.
+#
+# Collapses a run of blank lines left where the section used to sit, so
+# confirming a note doesn't leave a widening gap behind.
+drop_open_questions() {
+    local file="$1"
+    local tmp; tmp="$(mktemp)"
+    awk '
+        { sub(/\r$/, "") }
+        !inside && tolower($0) ~ /^##[ \t]+open questions[ \t]*$/ { inside = 1; next }
+        inside && $0 ~ /^##?[ \t]/ { inside = 0 }
+        inside { next }
+        { if ($0 == "" && prev_blank) next; print; prev_blank = ($0 == "") }
+    ' "${file}" > "${tmp}" && replace_file "${tmp}" "${file}"
+}
+
 # Notes still awaiting an answer, excluding ones the user told us to drop.
 #
 # grep only narrows the candidate list — .claude/commands and templates/ both
@@ -339,6 +359,7 @@ if [ -s "${REPLIES}" ]; then
             # Deterministic: no Claude call, no tokens.
             log "${note}: confirmed, clearing flag"
             fm_drop "${note}" 'needs-review' 'review-round'
+            drop_open_questions "${note}"
             json_del "${STATE}/notified.json" "${note}"
             json_del "${STATE}/threads.json" "${note}"
         fi

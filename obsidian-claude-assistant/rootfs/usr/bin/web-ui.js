@@ -20,6 +20,7 @@
 // the shape of isNotePath() and the reply record by copy, not by require, so
 // each stays independently restartable.
 
+const { execFile } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -47,8 +48,58 @@ const MAX_INLINE_REPLY = 4096;
 
 const ATTACH_DIR = 'attachments';
 
+// The ongoing shortcut notification. notify.sh owns the payload and the
+// opt-in check; this file only decides *when* to (re-)post it. NOTIFY is
+// overridable so the timing can be exercised with a stub outside the container.
+const NOTIFY = process.env.NOTIFY_BIN || '/usr/bin/notify.sh';
+const SHORTCUT_TAG = 'obsidian-claude-assistant:shortcut';
+const SHORTCUT_ENABLED = process.env.PERSISTENT_SHORTCUT === 'true';
+// Collapses the burst of reloads around one visit. Nothing breaks without it —
+// re-posting under a fixed tag is a silent replace — it just keeps the log
+// readable when a page is refreshed a few times in a row.
+const SHORTCUT_MIN_INTERVAL_MS = 30 * 1000;
+
 const log = (...a) => console.log('[web]', ...a);
 const warn = (...a) => console.error('[web]', ...a);
+
+// --- the ongoing shortcut ----------------------------------------------------
+// A persistent notification lives on the phone, not here, so nothing in this
+// container can tell whether it is still there. It survives an add-on restart
+// and dies with a phone reboot, an app update, or an Android 14 swipe.
+//
+// Re-posting on every triage cycle would keep it alive but spend a service call
+// every few minutes forever to fix something that almost never breaks. Opening
+// the page is the better trigger: it is the moment the phone is in hand, and
+// the one moment the shortcut being gone is both provable and worth fixing —
+// you just had to reach the page some other way.
+//
+// The gap is a shortcut lost while the page goes unopened. That is survivable
+// by design: the sidebar entry it duplicates never goes anywhere.
+
+let shortcutSentAt = 0;
+
+function notify(args, what) {
+  execFile(NOTIFY, args, (err, stdout, stderr) => {
+    if (err) warn(`${what} failed:`, (stderr || err.message).trim());
+    else if (stderr.trim()) warn(`${what}:`, stderr.trim());
+  });
+}
+
+function refreshShortcut(force) {
+  if (!SHORTCUT_ENABLED) return;
+  const now = Date.now();
+  if (!force && now - shortcutSentAt < SHORTCUT_MIN_INTERVAL_MS) return;
+  shortcutSentAt = now;
+  notify(['shortcut'], 'shortcut post');
+}
+
+// Turning the option off restarts the add-on but cannot reach into the shade,
+// and the notification it leaves behind is the non-dismissible kind. Clearing
+// the tag on every disabled start is what makes the option reversible.
+function syncShortcutOnStart() {
+  if (SHORTCUT_ENABLED) refreshShortcut(true);
+  else notify(['clear', SHORTCUT_TAG], 'shortcut clear');
+}
 
 // --- shared shapes (copied from reply-listener.js, keep in sync) -------------
 
@@ -747,6 +798,9 @@ function handle(req, res) {
   const url = (req.url || '/').split('?')[0];
 
   if (req.method === 'GET' && url === '/') {
+    // Only the page itself, not the API routes it calls afterwards: one visit
+    // should mean one re-post, not one per button press.
+    refreshShortcut(false);
     const html = renderPage();
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(html);
@@ -783,5 +837,8 @@ if (require.main === module) {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     }
-  }).listen(PORT, '0.0.0.0', () => log(`listening on :${PORT}`));
+  }).listen(PORT, '0.0.0.0', () => {
+    log(`listening on :${PORT}`);
+    syncShortcutOnStart();
+  });
 }

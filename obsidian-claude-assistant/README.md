@@ -192,6 +192,7 @@ can inspect the repo or unwedge a git state without touching this add-on.
 | `model` | `sonnet` | Cheap, and usually fine for well-formed captures. Set `opus` if triage keeps guessing the type wrong. |
 | `notify_on` | `questions` | `errors` = only failures. `questions` = failures + flagged notes. `always` = those plus a notice when work completes: "Filed N note(s)" after a triage, "Applied your reply" after an answer. Suppressed when it would double up with a question notification for the same note this cycle — always true for a single reply, and for a triage batch of exactly one note. A multi-note batch always gets its "Filed" notice, since triage can rename a capture on the way in and there is no reliable way to tell which note in the batch is the one that still needs review. |
 | `enable_replies` | `true` | Off means notifications carry no action buttons. |
+| `persistent_shortcut` | `false` | Android only. Keeps one ongoing notification in the shade whose only job is to open the web page. See [The shortcut notification](#the-shortcut-notification). |
 | `max_notifications_per_cycle` | `3` | Stops a large batch from spamming your phone. |
 | `vault_path` | `/share/notes` | |
 
@@ -214,9 +215,14 @@ rather than stacking. One live notification per note, updating as the
 conversation moves.
 
 **Tapping the notification body opens the add-on's web page**, where the same
-question sits with a full reply box. On Android the notification is also
-`sticky`, so the tap doesn't dismiss it — answering (with **Answer**, **Looks
-good**, or from the page) clears it for you.
+question sits with a full reply box. The tap dismisses the notification, which
+costs nothing: you have landed on the page that lists the question. Answering
+from the page (or with **Answer**, **Looks good**) clears the notification on
+your other devices too.
+
+The tap uses a *relative* path, so it works on any network — the Companion app
+resolves it against whichever URL it is connected on. If it fails away from
+home, see [Troubleshooting](#troubleshooting).
 
 **A question is never re-sent, and never expires.** You get exactly one
 notification per round. A notification lost to a swipe, a phone that was off,
@@ -226,6 +232,30 @@ up after a round cap — both existed only because a lost notification used to
 mean a lost question.)
 
 Add a `Needs Review.base` view to the vault to see everything flagged at once.
+
+## The shortcut notification
+
+`persistent_shortcut: true` adds one more notification that is not about any
+note: it sits in the shade permanently, carries no text worth reading and no
+actions, and does exactly one thing when tapped — open the web page. A
+bookmark, in the place your thumb already is.
+
+Android only, and deliberately quiet: it gets its own **Assistant shortcut**
+channel at `min` importance, so it never makes a sound, never puts an icon in
+the status bar, and sits at the foot of the shade. It is `persistent`, so a
+swipe does not take it (Android 14 and up still allow one while the phone is
+unlocked), and `sticky`, so tapping it leaves it where it is.
+
+It lives on the phone, not in the add-on, so nothing here can see whether it is
+still there. It survives an add-on restart; it dies with a phone reboot, an app
+update, or a force-stop. Rather than re-post it on a timer forever, the add-on
+re-posts it **when you open the web page** — the one moment its absence is both
+provable and worth fixing, since you just had to get there another way. Open
+the page from the sidebar once after a reboot and it comes back.
+
+Turning the option back off clears it on the next start. That matters more than
+it sounds: a `persistent` notification cannot be swiped away, so without that
+step it would outlive the setting that created it.
 
 ## The web page
 
@@ -330,6 +360,26 @@ container's port directly.
 **Tapping a question notification does nothing** — the add-on could not
 resolve its own slug at start (the init log will show a warning). Restart the
 add-on; until then the page is still reachable from the sidebar.
+
+**Tapping a question away from home prompts "use external URL"** — nothing in
+the notification to fix. The tap carries a relative path (`/hassio/ingress/…`),
+which the Companion app resolves against whatever URL it is connected on, so
+it is already network-agnostic; the prompt means the app itself still thinks it
+is on the home network. The app decides that by reading the WiFi SSID, and both
+iOS and Android only hand the SSID to an app with background location. Check,
+in order:
+
+1. Location permission for the Companion app is **Allow all the time**
+   (Android) or **Always** (iOS). Without it the app cannot tell home from
+   away and keeps trying the internal URL.
+2. Your home SSIDs are listed under Settings → Companion app → *your server* →
+   the internal URL's network settings. Add BSSIDs too if several APs share
+   one SSID.
+3. An external URL is set and serves valid TLS (HA Cloud, or your own reverse
+   proxy). Ingress works over remote access unchanged.
+
+The same prompt on opening the app normally confirms it is app-side network
+configuration rather than anything to do with this add-on.
 
 **Replies never arrive** — check the log for `authenticated, subscribing`. If the
 supervisor websocket is refused, fall back to an HA automation on

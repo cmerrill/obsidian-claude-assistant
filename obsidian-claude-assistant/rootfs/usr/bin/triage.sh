@@ -328,9 +328,11 @@ if [ -s "${REPLIES}" ]; then
             continue
         fi
 
-        # The question notification is sticky, so pressing an action leaves it
-        # on screen. Take it down now that it has been answered. A follow-up
-        # round sends a fresh one under the same tag.
+        # Take the question notification down now that it has been answered.
+        # Android usually drops it itself when an action is pressed, but not
+        # when the answer came from the web page or another device — and
+        # clearing a tag that is already gone is a no-op. A follow-up round
+        # sends a fresh one under the same tag.
         /usr/bin/notify.sh clear "obsidian-claude-assistant:${note}" || true
 
         # Precedence: stop beats a reply, a reply beats a bare acknowledgement.

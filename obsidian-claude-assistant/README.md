@@ -363,20 +363,29 @@ add-on; until then the page is still reachable from the sidebar.
 
 **Tapping a question away from home prompts "use external URL"** — nothing in
 the notification to fix. The tap carries a relative path (`/hassio/ingress/…`),
-which the Companion app resolves against whatever URL it is connected on, so
-it is already network-agnostic; the prompt means the app itself still thinks it
-is on the home network. The app decides that by reading the WiFi SSID, and both
-iOS and Android only hand the SSID to an app with background location. Check,
-in order:
+which the Companion app resolves against whichever URL it is connected on, so
+it is already network-agnostic. The prompt means the app is still pointed at
+your LAN. Check the app's own connection settings, under Settings → Companion
+app → *your server*:
 
-1. Location permission for the Companion app is **Allow all the time**
-   (Android) or **Always** (iOS). Without it the app cannot tell home from
-   away and keeps trying the internal URL.
-2. Your home SSIDs are listed under Settings → Companion app → *your server* →
-   the internal URL's network settings. Add BSSIDs too if several APs share
-   one SSID.
-3. An external URL is set and serves valid TLS (HA Cloud, or your own reverse
-   proxy). Ingress works over remote access unchanged.
+1. **The main "Home Assistant URL" is a real external URL, over HTTPS.** This
+   is the one the app falls back to when it is not home, and it is the usual
+   thing that is wrong: a LAN name like `http://homeassistant:8123/` sitting in
+   that field resolves at home and nowhere else, so there is nothing to fall
+   back to. Use HA Cloud or your own reverse proxy with a valid certificate.
+2. **"Remote connection security level" is Most secure.** The Less secure
+   option is worded "do not allow this app to know when you're home", and that
+   is exactly what it does — it switches off the home/away detection that picks
+   between the two URLs, so the app keeps trying the LAN one. A home network
+   SSID filled in below is inert while this is set.
+3. **Location permission is Allow all the time** (Android) or **Always** (iOS),
+   with your home SSIDs listed. Home/away is decided by reading the WiFi SSID,
+   and neither OS hands that to an app without background location. Add BSSIDs
+   too if several APs share one SSID.
+
+Do 1 before 2: Most secure refuses plain HTTP off the home network, so raising
+it without a working HTTPS external URL replaces the prompt with a blocking
+screen. Ingress works over remote access unchanged once this is right.
 
 The same prompt on opening the app normally confirms it is app-side network
 configuration rather than anything to do with this add-on.

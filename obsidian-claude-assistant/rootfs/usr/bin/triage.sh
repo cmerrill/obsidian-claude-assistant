@@ -558,9 +558,24 @@ cleanup_ephemeral() {
         [ -z "${owner}" ] && continue
 
         if [ -f "${VAULT}/${owner}" ]; then
-            [ "$(fm_get "${VAULT}/${owner}" 'needs-review')" = "true" ] \
-                && [ "$(fm_get "${VAULT}/${owner}" 'review-stopped')" != "true" ] \
-                && continue
+            case "${owner}" in
+                inbox/*)
+                    # Still sitting where the drop box wrote it: either a brand
+                    # new capture that hasn't reached step 4 yet (a raw inbox
+                    # note carries no needs-review key at all — that must not
+                    # read the same as "resolved"), or triage looked at it and
+                    # left it in inbox/ still wanting more. Either way
+                    # triage-inbox has not necessarily read the attachment yet,
+                    # so only review-stopped ends this one, matching CLAUDE_STOP
+                    # for the reply flow below.
+                    [ "$(fm_get "${VAULT}/${owner}" 'review-stopped')" != "true" ] && continue
+                    ;;
+                *)
+                    [ "$(fm_get "${VAULT}/${owner}" 'needs-review')" = "true" ] \
+                        && [ "$(fm_get "${VAULT}/${owner}" 'review-stopped')" != "true" ] \
+                        && continue
+                    ;;
+            esac
         else
             # A capture parked in inbox/stuck/ was never processed — its
             # attachment is still the only copy of whatever it carried.

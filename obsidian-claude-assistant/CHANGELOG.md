@@ -4,6 +4,15 @@ All notable changes to this add-on are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 match `config.yaml`.
 
+## 0.7.3 — 2026-08-23
+
+### Added
+- The shortcut notification (`persistent_shortcut: true`) now carries a
+  **Quick capture** text-input action. Typing into it and sending writes a new
+  note straight into `inbox/` for the next triage cycle — no need to open the
+  web page first. Same on/off switch as every other notification action:
+  `enable_replies`.
+
 ## 0.7.2 — 2026-08-23
 
 ### Fixed

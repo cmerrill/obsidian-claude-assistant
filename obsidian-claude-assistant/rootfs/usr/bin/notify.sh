@@ -64,8 +64,8 @@ if [ "${MODE}" = "clear" ]; then
     PAYLOAD="$(jq -n --arg tag "${TAG}" \
         '{ message: "clear_notification", data: { tag: $tag } }')"
 elif [ "${MODE}" = "shortcut" ]; then
-    # A standing one-tap route to the page, and nothing else: no actions, no
-    # question text, no reason to look at it twice.
+    # A standing one-tap route to the page, plus one text-input action for
+    # capturing a note straight into the inbox without opening anything.
     #
     # persistent needs a tag to hold on to, and sticky as well, or the first
     # tap takes the shortcut away — the one thing it must survive. (Android 14
@@ -77,15 +77,31 @@ elif [ "${MODE}" = "shortcut" ]; then
     # channel would either make this buzz or permanently mute those. min keeps
     # the shortcut out of the status bar and at the foot of the shade, which is
     # where a permanent fixture belongs.
+    #
+    # Same REPLY/textInput pair as the "ask" actions below, for the same
+    # reason: REPLY is the magic action name Android needs to render a direct-
+    # reply field, and iOS instead keys off behavior/textInputButtonTitle.
+    # reply-listener.js tells this apart from a note reply by tag, not by
+    # action name, so reusing REPLY here is safe.
+    if [ "${ENABLE_REPLIES:-true}" = "true" ]; then
+        ACTIONS='[
+          {"action":"REPLY","title":"Quick capture","behavior":"textInput",
+           "textInputButtonTitle":"Save","textInputPlaceholder":"Add to inbox…"}
+        ]'
+    else
+        ACTIONS='[]'
+    fi
+
     PAYLOAD="$(jq -n \
         --arg title "${TITLE}" \
         --arg message "${MESSAGE}" \
         --arg tag "${TAG}" \
         --arg u "${INGRESS_PANEL_PATH}" \
+        --argjson actions "${ACTIONS}" \
         '{
            title: $title,
            message: $message,
-           data: {
+           data: ({
              tag: $tag,
              group: "obsidian-claude-assistant",
              channel: "Assistant shortcut",
@@ -95,7 +111,7 @@ elif [ "${MODE}" = "shortcut" ]; then
              notification_icon: "mdi:message-question-outline",
              clickAction: $u,
              url: $u
-           }
+           } + (if ($actions | length) > 0 then { actions: $actions } else {} end))
          }')"
 else
     # Android caps a notification at 3 actions, so all three have to earn their

@@ -236,9 +236,16 @@ Add a `Needs Review.base` view to the vault to see everything flagged at once.
 ## The shortcut notification
 
 `persistent_shortcut: true` adds one more notification that is not about any
-note: it sits in the shade permanently, carries no text worth reading and no
-actions, and does exactly one thing when tapped — open the web page. A
-bookmark, in the place your thumb already is.
+note: it sits in the shade permanently, carries no text worth reading, and
+does one thing when tapped — open the web page. A bookmark, in the place your
+thumb already is.
+
+It also carries one action, **Quick capture** (off if `enable_replies` is
+off, same as every other notification action). Typing into it and sending
+writes what you typed straight into `inbox/` as a new note — no note to
+correlate it to, so it skips the reply pipeline entirely and lands directly in
+the vault, same as a Drop box capture from the web page. It's filed on the
+next triage cycle like anything else in `inbox/`.
 
 Android only, and deliberately quiet: it gets its own **Assistant shortcut**
 channel at `min` importance, so it never makes a sound, never puts an icon in

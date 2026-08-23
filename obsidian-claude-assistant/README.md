@@ -362,7 +362,7 @@ resolve its own slug at start (the init log will show a warning). Restart the
 add-on; until then the page is still reachable from the sidebar.
 
 **Tapping a question away from home prompts "use external URL"** — nothing in
-the notification to fix. The tap carries a relative path (`/hassio/ingress/…`),
+the notification to fix. The tap carries a relative path (`/<slug>`),
 which the Companion app resolves against whatever URL it is connected on, so
 it is already network-agnostic; the prompt means the app itself still thinks it
 is on the home network. The app decides that by reading the WiFi SSID, and both

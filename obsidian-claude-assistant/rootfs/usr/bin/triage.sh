@@ -221,6 +221,10 @@ json_del() {
 # so quoting or a crafted path defeats it; the script checks the real location.
 CLAUDE_TOOLS="Read,Glob,Grep,WebFetch,WebSearch,Bash(geocode.sh *),Bash(inbox-done.sh *),Bash(ls *)"
 
+# stream-json rather than json: only the stream carries the structured
+# rate_limit_event that says a subscription limit was hit and when it resets.
+# The final `result` line in it is the same object `json` used to print alone.
+# Print mode refuses stream-json without --verbose.
 claude_flags() {
     if [ "${PERMISSION_MODE:-allowlist}" = "bypass" ]; then
         printf '%s\0' --dangerously-skip-permissions
@@ -228,48 +232,182 @@ claude_flags() {
         printf '%s\0' --permission-mode acceptEdits --allowedTools "${CLAUDE_TOOLS}"
     fi
     printf '%s\0' --disallowedTools "AskUserQuestion,Skill"
-    printf '%s\0' --model "${MODEL}" --output-format json
+    printf '%s\0' --model "${MODEL}" --output-format stream-json --verbose
 }
 
+# --- usage limits ------------------------------------------------------------
+# Out of 5-hour or weekly quota, every call fails until the window resets. Left
+# alone, each cycle retried, sent a "Triage failed" notice, and counted the
+# failure against the note — so three ticks later a perfectly good note was
+# parked in inbox/stuck/. A quota failure is a property of the account, not of
+# the note: it sets a hold, and nothing calls Claude until the hold expires.
+#
+# RUN_CLAUDE_QUOTA is what run_claude returns for one (EX_TEMPFAIL).
+RUN_CLAUDE_QUOTA=75
+QUOTA_HOLD="${STATE}/quota-hold.json"
+QUOTA_TAG="obsidian-claude-assistant:quota"
+
+# Without a reset time to go on, wait an hour, doubling on each repeat up to a
+# ceiling. A 5-hour window is over well within that; a weekly one gets polled
+# a handful of times a day rather than every tick.
+QUOTA_BACKOFF_MIN=3600
+QUOTA_BACKOFF_MAX=21600
+
+# Classify a failed run. Prints "<kind> <reset-epoch>" (either may be "-") and
+# succeeds when the failure was a usage limit.
+#
+# The structured signal comes first: a rate_limit_event whose status is
+# "rejected" names the limit and its reset time exactly. The text patterns are
+# the fallback for a CLI that did not emit one; they only ever run on a run
+# that already failed, so they cannot misfire on a good one — but they stay
+# specific to usage, since "Context limit reached" is a failure too. The
+# legacy "Claude AI usage limit reached|<epoch>" form carries its own reset.
+quota_classify() {
+    local stream="$1" errf="$2" hit kind reset text
+    hit="$(jq -R -r '
+        fromjson?
+        | select(.type == "rate_limit_event" and .rate_limit_info.status == "rejected")
+        | "\(.rate_limit_info.rateLimitType // "-") \(.rate_limit_info.resetsAt // "-")"
+    ' "${stream}" 2>/dev/null | tail -n 1)"
+
+    if [ -z "${hit}" ]; then
+        text="$(jq -R -r 'fromjson? | select(.type == "result") | .result // empty' "${stream}" 2>/dev/null)
+$(cat "${errf}" 2>/dev/null)"
+        printf '%s' "${text}" | grep -qiE \
+            "hit your .*limit|usage limit|(session|weekly) limit|rate_limit_error|\b429\b" \
+            || return 1
+        reset="$(printf '%s' "${text}" | grep -oE 'limit reached\|[0-9]{9,13}' | head -n 1 | cut -d'|' -f2)"
+        hit="- ${reset:--}"
+    fi
+
+    kind="${hit%% *}"; reset="${hit#* }"
+    # Seconds, but accept milliseconds rather than wait 50,000 years.
+    case "${reset}" in
+        ''|*[!0-9]*) reset="-" ;;
+        *) [ "${#reset}" -ge 13 ] && reset=$(( reset / 1000 )) ;;
+    esac
+    printf '%s %s\n' "${kind:--}" "${reset}"
+}
+
+# Epoch the current hold ends at, or 0 when there is none.
+quota_hold_until() {
+    local u
+    u="$(jq -r '.until // 0' "${QUOTA_HOLD}" 2>/dev/null)"
+    case "${u}" in ''|*[!0-9]*) u=0 ;; esac
+    echo "${u}"
+}
+
+quota_hold_active() { [ "$(quota_hold_until)" -gt "$(date +%s)" ]; }
+
+quota_fmt() { date -d "@$1" '+%a %H:%M' 2>/dev/null || echo "epoch $1"; }
+
+quota_set_hold() {
+    local kind="$1" reset="$2" now until backoff prev label fresh=0
+    now="$(date +%s)"
+    [ -f "${QUOTA_HOLD}" ] || fresh=1
+
+    if [ "${reset}" != "-" ] && [ "${reset}" -gt "${now}" ]; then
+        # A minute of slack: the reset is the server's clock, not ours.
+        until=$(( reset + 60 ))
+        backoff=0
+    else
+        prev="$(jq -r '.backoff // 0' "${QUOTA_HOLD}" 2>/dev/null)"
+        case "${prev}" in ''|*[!0-9]*) prev=0 ;; esac
+        backoff=$(( prev * 2 ))
+        [ "${backoff}" -lt "${QUOTA_BACKOFF_MIN}" ] && backoff="${QUOTA_BACKOFF_MIN}"
+        [ "${backoff}" -gt "${QUOTA_BACKOFF_MAX}" ] && backoff="${QUOTA_BACKOFF_MAX}"
+        until=$(( now + backoff ))
+    fi
+
+    jq -n --arg kind "${kind}" --argjson until "${until}" --argjson backoff "${backoff}" \
+        --argjson since "${now}" '{kind: $kind, until: $until, backoff: $backoff, since: $since}' \
+        > "${QUOTA_HOLD}"
+
+    case "${kind}" in
+        five_hour) label="5-hour" ;;
+        seven_day*) label="weekly" ;;
+        *) label="usage" ;;
+    esac
+    log "claude ${label} limit reached, pausing Claude until $(quota_fmt "${until}")"
+
+    # One notice per outage, not per tick. A hold that lapses and is renewed
+    # without a success in between is the same outage, and its notice is
+    # still in the shade under the same tag.
+    [ "${fresh}" -eq 1 ] && /usr/bin/notify.sh plain "${QUOTA_TAG}" \
+        "Claude ${label} limit reached" \
+        "Pausing triage until $(quota_fmt "${until}"). Notes and replies are kept and will be processed then." \
+        || true
+}
+
+quota_clear_hold() {
+    [ -f "${QUOTA_HOLD}" ] || return 0
+    rm -f "${QUOTA_HOLD}"
+    log "claude usage available again, hold cleared"
+    /usr/bin/notify.sh clear "${QUOTA_TAG}" || true
+}
+
+# Returns 0 on success, RUN_CLAUDE_QUOTA on a usage limit, or claude's own
+# non-zero exit otherwise.
 run_claude() {
-    local prompt="$1" resume="${2:-}" out rc
+    local prompt="$1" resume="${2:-}" out errf res rc q
     local -a flags=()
     mapfile -d '' -t flags < <(claude_flags)
-    out="$(mktemp)"
+    out="$(mktemp)"; errf="$(mktemp)"; res="$(mktemp)"
 
     if [ -n "${resume}" ]; then
-        claude -p "${prompt}" --resume "${resume}" "${flags[@]}" > "${out}" 2>/dev/null
+        claude -p "${prompt}" --resume "${resume}" "${flags[@]}" > "${out}" 2> "${errf}"
         rc=$?
-        if [ ${rc} -ne 0 ]; then
+        # A usage limit fails the resume too, and retrying fresh would only
+        # spend a second call and lose the thread.
+        if [ ${rc} -ne 0 ] && ! q="$(quota_classify "${out}" "${errf}")"; then
             log "resume of session ${resume} failed, starting fresh"
             resume=""
         fi
     fi
 
     if [ -z "${resume}" ]; then
-        claude -p "${prompt}" "${flags[@]}" > "${out}"
+        claude -p "${prompt}" "${flags[@]}" > "${out}" 2> "${errf}"
         rc=$?
+        cat "${errf}" >&2
     fi
 
-    cp "${out}" "${STATE}/last-run.json"
+    # Keep the whole stream for debugging, and the final result object where
+    # last-run.json has always had it.
+    cp "${out}" "${STATE}/last-run.jsonl"
+    jq -R -c 'fromjson? | select(.type == "result")' "${out}" 2>/dev/null | tail -n 1 > "${res}"
+    cp "${res}" "${STATE}/last-run.json"
 
     # Surface refusals. A tool the prompt legitimately needs shows up here, and
     # is the signal to widen CLAUDE_TOOLS rather than to bypass permissions.
     local denied
-    denied="$(jq -r '[.permission_denials[]?.tool_name] | unique | join(", ")' "${out}" 2>/dev/null)"
+    denied="$(jq -r '[.permission_denials[]?.tool_name] | unique | join(", ")' "${res}" 2>/dev/null)"
     [ -n "${denied}" ] && log "tools refused this run: ${denied}"
 
+    # A limit can also come back as is_error with exit 0, so check both. Any
+    # other is_error run is left to count as success, as it always has.
+    if [ ${rc} -ne 0 ] || [ "$(jq -r '.is_error // false' "${res}" 2>/dev/null)" = "true" ]; then
+        if q="$(quota_classify "${out}" "${errf}")"; then
+            quota_set_hold "${q%% *}" "${q#* }"
+            rm -f "${out}" "${errf}" "${res}"
+            return ${RUN_CLAUDE_QUOTA}
+        fi
+    fi
     if [ ${rc} -ne 0 ]; then
         err "claude exited ${rc}"
-        rm -f "${out}"
+        rm -f "${out}" "${errf}" "${res}"
         return ${rc}
     fi
 
-    CLAUDE_RESULT="$(jq -r '.result // empty' "${out}")"
-    CLAUDE_SESSION="$(jq -r '.session_id // empty' "${out}")"
-    rm -f "${out}"
+    quota_clear_hold
+    CLAUDE_RESULT="$(jq -r '.result // empty' "${res}")"
+    CLAUDE_SESSION="$(jq -r '.session_id // empty' "${res}")"
+    rm -f "${out}" "${errf}" "${res}"
     return 0
 }
+
+if quota_hold_active; then
+    log "claude paused for a usage limit until $(quota_fmt "$(quota_hold_until)"), skipping Claude steps this cycle"
+fi
 
 # --- 1. wait for the vault to stop moving ------------------------------------
 # Do not triage a file Obsidian Sync is still writing. `ob sync-status` output
@@ -307,6 +445,12 @@ if [ -s "${PENDING}" ]; then
     rm -f "${PENDING}"
 fi
 
+# Put one note's claimed answers back on the live queue. Appends, for the same
+# reason as the recovery above.
+requeue_replies() {
+    jq -c --arg n "$1" 'select(.note == $n)' "${PENDING}" >> "${REPLIES}" 2>/dev/null
+}
+
 if [ -s "${REPLIES}" ]; then
     # Claim the queue atomically; the listener keeps appending to a fresh file.
     mv "${REPLIES}" "${PENDING}"
@@ -342,10 +486,24 @@ if [ -s "${REPLIES}" ]; then
             json_del "${STATE}/notified.json" "${note}"
 
         elif [[ "${actions}" == *REPLY* ]]; then
+            # Out of quota: put this note's answers back on the live queue,
+            # untouched, for the first cycle after the hold ends. Checked per
+            # note, because an earlier note in this same drain may be the one
+            # that hit the limit.
+            if quota_hold_active; then
+                log "${note}: holding reply until the usage limit resets"
+                requeue_replies "${note}"
+                continue
+            fi
             texts="$(jq -r '.replies | join(" | ")' <<<"${group}")"
             log "${note}: applying reply"
             session="$(json_get "${STATE}/threads.json" "${note}")"
-            if run_claude "/resolve-review ${note} — replies in order: ${texts}" "${session}"; then
+            run_claude "/resolve-review ${note} — replies in order: ${texts}" "${session}"
+            rc=$?
+            if [ ${rc} -eq ${RUN_CLAUDE_QUOTA} ]; then
+                log "${note}: holding reply until the usage limit resets"
+                requeue_replies "${note}"
+            elif [ ${rc} -eq 0 ]; then
                 echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
                 [ -n "${CLAUDE_SESSION}" ] && json_set "${STATE}/threads.json" "${note}" "${CLAUDE_SESSION}"
                 # Skip the "applied" notice if the reply left the note still
@@ -428,7 +586,11 @@ else
     names="$(printf '%s, ' "${READY[@]##*/}")"
     names="${names%, }"
 
-    log "triaging ${#READY[@]} note(s): ${names}"
+    if quota_hold_active; then
+        log "${#READY[@]} note(s) waiting for the usage limit to reset: ${names}"
+    else
+        log "triaging ${#READY[@]} note(s): ${names}"
+    fi
 
     # A batch of exactly one note can be checked without ambiguity: anything
     # newly flagged after processing it has to be that note. A batch of two
@@ -438,12 +600,23 @@ else
     # it became. So only the single-note case is de-duplicated against its
     # own question notification in step 8; a multi-note batch always gets the
     # "Filed" notice, same as before.
-    if [ "${#READY[@]}" -eq 1 ]; then
+    before_flagged=""
+    if [ "${#READY[@]}" -eq 1 ] && ! quota_hold_active; then
         before_flagged="$(mktemp)"
         flagged_notes | sort > "${before_flagged}"
     fi
 
-    if run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"; then
+    if quota_hold_active; then
+        rc=${RUN_CLAUDE_QUOTA}
+    else
+        run_claude "/triage-inbox — process only these notes, and ignore any other file in inbox/: ${names}"
+        rc=$?
+    fi
+
+    if [ ${rc} -eq ${RUN_CLAUDE_QUOTA} ]; then
+        # Not the notes' fault: keep them out of the stuck count below.
+        READY=()
+    elif [ ${rc} -eq 0 ]; then
         echo "${CLAUDE_RESULT}" | sed 's/^/[triage] /'
         vault_commit_and_push "Triage: ${#READY[@]} note(s) from inbox" || true
 
@@ -461,7 +634,7 @@ else
             "Triage failed" "Claude exited non-zero on ${#READY[@]} inbox note(s). Check the add-on log."
         # Leave the files in place; the stuck counter below decides when to give up.
     fi
-    [ "${#READY[@]}" -eq 1 ] && rm -f "${before_flagged}"
+    [ -n "${before_flagged}" ] && rm -f "${before_flagged}"
 fi
 
 # --- 5. stuck files ----------------------------------------------------------

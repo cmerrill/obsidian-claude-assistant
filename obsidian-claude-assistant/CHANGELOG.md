@@ -4,6 +4,22 @@ All notable changes to this add-on are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 match `config.yaml`.
 
+## 0.8.0 — 2026-09-28
+
+### Fixed
+- Running out of 5-hour or weekly usage no longer loops through the inbox
+  and parks good notes in `inbox/stuck/`. Claude's output is now read as
+  `stream-json`, whose `rate_limit_event` says a limit was hit and exactly
+  when it resets. A usage-limit failure sets a hold (`/data/quota-hold.json`),
+  and no cycle calls Claude until it ends. While it lasts:
+  - Inbox notes wait and aren't counted as failed attempts.
+  - Answers stay queued instead of being dropped.
+  - A failed resume is not retried as a fresh session.
+  - One notification replaces the per-cycle "Triage failed".
+
+  The loop wakes at the reset time. If no reset time is reported, it backs
+  off 1h, doubling to a 6h cap.
+
 ## 0.7.3 — 2026-08-23
 
 ### Added

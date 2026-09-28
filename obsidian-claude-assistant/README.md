@@ -406,6 +406,14 @@ Companion app.
 **A note keeps failing** — after 3 attempts it moves to `inbox/stuck/` and you
 get one notification. Fix it by hand and move it back to `inbox/`.
 
+**Out of 5-hour or weekly usage** — the first failed run sets a hold and sends
+one notification with the reset time. Until then no cycle calls Claude: inbox
+notes wait where they are (and are not counted toward `inbox/stuck/`), and
+answers stay queued. Everything that doesn't need Claude still runs. The loop
+wakes when the limit resets, and the notification is cleared after the next
+successful run. If the CLI gives no reset time, it retries after 1h, then 2h,
+4h, capped at 6h.
+
 **A ticked box did not move to `## Done`** — the log says which. A note edited
 within `inbox_settle_minutes` is left for the next cycle, and only a top-level
 task moves: a checked subtask stays under its parent until the parent is ticked
@@ -426,7 +434,9 @@ included in add-on backups:
 | `ephemeral.json` | Uploads marked "delete after processing", keyed by the note that owns them |
 | `threads.json` | Claude session id per note, for conversation resume |
 | `geocode-cache.json` | Address → coordinates, so a repeated address costs no request |
-| `last-run.json` | Full JSON output of the most recent Claude run |
+| `last-run.json` | Final result object of the most recent Claude run |
+| `last-run.jsonl` | Full stream-json output of that run |
+| `quota-hold.json` | Present while Claude is paused for a usage limit: which limit, and when the pause ends |
 
 ## What Claude is allowed to do
 

@@ -4,7 +4,7 @@ All notable changes to this add-on are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 match `config.yaml`.
 
-## 0.7.4 — 2026-09-28
+## 0.8.0 — 2026-09-28
 
 ### Fixed
 - Running out of 5-hour or weekly usage no longer loops through the inbox
